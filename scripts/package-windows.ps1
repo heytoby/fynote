@@ -96,8 +96,8 @@ Fynote $version · Windows x64
             Start-Sleep -Milliseconds 500
         }
         if (-not $ready) { throw 'The packaged server failed its health check.' }
-        $home = Invoke-WebRequest -Uri $address -TimeoutSec 4 -NoProxy
-        if ($home.StatusCode -ne 200 -or $home.Content -notmatch '<app-root') {
+        $homeResponse = Invoke-WebRequest -Uri $address -TimeoutSec 4 -NoProxy
+        if ($homeResponse.StatusCode -ne 200 -or $homeResponse.Content -notmatch '<app-root') {
             throw 'The packaged frontend did not load.'
         }
     } finally {
