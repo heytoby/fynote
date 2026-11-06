@@ -1,0 +1,13 @@
+{
+  "id": "/",
+  "name": "fynote",
+  "short_name": "fynote",
+  "description": "fynote notes app.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone"],
+  "background_color": "#f7f6f2",
+  "theme_color": "#f7f6f2",
+  "icons": []
+}
