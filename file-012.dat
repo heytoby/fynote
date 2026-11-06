@@ -1,0 +1,178 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+internal static class FynoteLauncher
+{
+    private const int RestartExitCode = 42;
+    private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+    private static readonly Regex Version = new Regex(@"^(0|[1-9]\d{0,5})(\.(0|[1-9]\d{0,5})){2}$");
+
+    [STAThread]
+    private static void Main()
+    {
+        string root = AppDomain.CurrentDomain.BaseDirectory;
+        string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Kept");
+        using (var mutex = new Mutex(false, @"Local\FynoteDesktop"))
+        {
+            bool ownsMutex = false;
+            try
+            {
+                try { ownsMutex = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { ownsMutex = true; }
+
+                Directory.CreateDirectory(profile);
+                string portFile = Path.Combine(profile, "FynotePort.txt");
+                int previousPort = ReadPort(portFile);
+                if (!ownsMutex)
+                {
+                    if (previousPort > 0 && WaitForReady(previousPort, null, null)) OpenWindow(previousPort, profile);
+                    else throw new InvalidOperationException("Fynote 正在启动，请稍后再打开。");
+                    return;
+                }
+
+                int port = ReservePort(previousPort);
+                File.WriteAllText(portFile, port.ToString(), new UTF8Encoding(false));
+                bool openWindow = true;
+                while (true)
+                {
+                    string stateFile = Path.Combine(root, "current.json");
+                    var state = Json.Deserialize<Dictionary<string, string>>(File.ReadAllText(stateFile));
+                    string version = ValidVersion(state, "version");
+                    if (version == null) throw new InvalidDataException("找不到 Fynote 版本信息。");
+                    string previousVersion = ValidVersion(state, "previousVersion");
+                    using (Process server = StartServer(root, profile, version, port))
+                    {
+                        if (!WaitForReady(port, version, server))
+                        {
+                            if (!server.HasExited)
+                            {
+                                server.Kill();
+                                server.WaitForExit();
+                            }
+                            if (previousVersion == null || previousVersion == version ||
+                                !Directory.Exists(Path.Combine(root, "versions", previousVersion)))
+                                throw new InvalidOperationException("本地服务未能启动。");
+                            string rollback = stateFile + ".rollback";
+                            File.WriteAllText(rollback, Json.Serialize(new { version = previousVersion }), new UTF8Encoding(false));
+                            File.Replace(rollback, stateFile, null);
+                            MessageBox.Show("新版启动失败，已切回版本 " + previousVersion + "。", "Fynote");
+                            continue;
+                        }
+                        if (openWindow)
+                        {
+                            OpenWindow(port, profile);
+                            openWindow = false;
+                        }
+                        server.WaitForExit();
+                        if (server.ExitCode != RestartExitCode) break;
+                    }
+                }
+            }
+            catch (Exception error)
+            {
+                MessageBox.Show("无法启动 Fynote。\n" + error.Message, "Fynote", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (ownsMutex) mutex.ReleaseMutex();
+            }
+        }
+    }
+
+    private static string ValidVersion(Dictionary<string, string> state, string key)
+    {
+        string value;
+        return state.TryGetValue(key, out value) && value != null && Version.IsMatch(value) ? value : null;
+    }
+
+    private static Process StartServer(string root, string profile, string version, int port)
+    {
+        string payload = Path.Combine(root, "versions", version);
+        var start = new ProcessStartInfo(Path.Combine(payload, "runtime", "node.exe"), "server/server.js");
+        start.WorkingDirectory = Path.Combine(payload, "app");
+        start.UseShellExecute = false;
+        start.CreateNoWindow = true;
+        start.EnvironmentVariables["NODE_ENV"] = "production";
+        start.EnvironmentVariables["PORT"] = port.ToString();
+        start.EnvironmentVariables["DATA_DIR"] = Path.Combine(profile, "data");
+        start.EnvironmentVariables["BASE_URL"] = Address(port);
+        start.EnvironmentVariables["FYNOTE_DESKTOP_ROOT"] = root;
+        return Process.Start(start);
+    }
+
+    private static string Address(int port)
+    {
+        return "http://127.0.0.1:" + port;
+    }
+
+    private static int ReadPort(string file)
+    {
+        int port;
+        return File.Exists(file) && Int32.TryParse(File.ReadAllText(file), out port) && port > 0 && port <= 65535 ? port : 0;
+    }
+
+    private static int ReservePort(int preferred)
+    {
+        var listener = new TcpListener(IPAddress.Loopback, preferred);
+        try { listener.Start(); }
+        catch (SocketException)
+        {
+            listener.Stop();
+            if (preferred == 0) throw;
+            return ReservePort(0);
+        }
+        try { return ((IPEndPoint)listener.LocalEndpoint).Port; }
+        finally { listener.Stop(); }
+    }
+
+    private static bool WaitForReady(int port, string version, Process server)
+    {
+        var timeout = Stopwatch.StartNew();
+        while (timeout.Elapsed < TimeSpan.FromSeconds(40))
+        {
+            if (server != null && server.HasExited) return false;
+            try
+            {
+                var request = (HttpWebRequest)WebRequest.Create(Address(port) + "/api/health");
+                request.Proxy = null;
+                request.AllowAutoRedirect = false;
+                request.Timeout = 750;
+                using (var response = (HttpWebResponse)request.GetResponse())
+                {
+                    string actual = response.Headers["X-Fynote-Desktop-Version"];
+                    if (response.StatusCode == HttpStatusCode.OK && actual != null && (version == null || version == actual))
+                        return true;
+                }
+            }
+            catch (WebException) {}
+            Thread.Sleep(250);
+        }
+        return false;
+    }
+
+    private static void OpenWindow(int port, string profile)
+    {
+        foreach (var directory in new[] {
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+        })
+        {
+            string edge = Path.Combine(directory, "Microsoft", "Edge", "Application", "msedge.exe");
+            if (!File.Exists(edge)) continue;
+            string arguments = "--app=" + Address(port) + " --user-data-dir=\"" + Path.Combine(profile, "WebViewProfile") + "\" --no-first-run";
+            Process.Start(new ProcessStartInfo(edge, arguments) { UseShellExecute = false });
+            return;
+        }
+        Process.Start(new ProcessStartInfo(Address(port)) { UseShellExecute = true });
+    }
+}
