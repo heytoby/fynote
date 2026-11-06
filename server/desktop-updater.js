@@ -58,7 +58,7 @@ function installationRoot(root, version, applicationDirectory) {
   return path.relative(expected, path.resolve(applicationDirectory)) === '' ? resolved : null;
 }
 
-async function fetchPackage(asset, destination, fetchImpl) {
+async function fetchPackage(asset, destination, fetchImpl, onProgress) {
   const signal = AbortSignal.timeout(15 * 60 * 1000);
   let url = new URL(asset.url);
   let response;
@@ -86,6 +86,7 @@ async function fetchPackage(asset, destination, fetchImpl) {
       bytes += chunk.length;
       if (bytes > asset.size) return done(new Error('更新包大小与发布记录不符。'));
       hash.update(chunk);
+      onProgress?.(bytes, asset.size);
       done(null, chunk);
     }
   });
@@ -182,12 +183,12 @@ async function installRelease(root, currentVersion, release, fetchImpl = fetch) 
   }
 }
 
-async function stageSetup(root, asset, fetchImpl = fetch) {
+async function stageSetup(root, asset, fetchImpl = fetch, onProgress) {
   const directory = path.join(root, '.update');
   await files.mkdir(directory, { recursive: true });
   const temporary = path.join(directory, crypto.randomUUID() + '.exe');
   try {
-    await fetchPackage(asset, temporary, fetchImpl);
+    await fetchPackage(asset, temporary, fetchImpl, onProgress);
     await files.rename(temporary, path.join(directory, 'setup.exe'));
   } finally {
     await files.rm(temporary, { force: true });

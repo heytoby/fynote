@@ -70,6 +70,8 @@ const desktopRoot = process.platform === 'win32'
   ? installationRoot(process.env.FYNOTE_DESKTOP_ROOT, KEPT_VERSION, path.join(__dirname, '..'))
   : null;
 let desktopUpdating = false;
+let desktopUpdateProgress = null;
+let desktopShuttingDown = false;
 
 function isDesktopRequest(req) {
   return !!desktopRoot && req.socket.remoteAddress === '127.0.0.1' && req.get('host') === `127.0.0.1:${port}`;
@@ -4696,6 +4698,7 @@ app.get('/api/admin/update-status', requireAuth, requireAdmin, asyncRoute(async 
     publishedAt: latest?.publishedAt || null,
     isOutdated,
     desktop,
+    updateProgress: desktop ? desktopUpdateProgress : null,
     canInstall: desktop && isOutdated && !!desktopUpdateAsset(latest) && !updateCheckCache.error,
     suppressed: !!suppressed,
     dismissedForever,
@@ -4704,6 +4707,26 @@ app.get('/api/admin/update-status', requireAuth, requireAdmin, asyncRoute(async 
     checkError: updateCheckCache.error
   });
 }));
+
+function shutdownDesktop(exitCode) {
+  if (desktopShuttingDown) return;
+  desktopShuttingDown = true;
+  realtimeClients.forEach(sockets => sockets.forEach(socket => socket.terminate()));
+  const closeRemaining = setTimeout(() => server.closeAllConnections(), 2000);
+  closeRemaining.unref();
+  server.close(() => {
+    clearTimeout(closeRemaining);
+    db.close(error => {
+      if (error) console.error('Fynote database close failed:', error);
+      process.exit(error ? 1 : exitCode);
+    });
+  });
+}
+
+if (desktopRoot && process.env.FYNOTE_CLOSE_ON_STDIN_END === '1') {
+  process.stdin.once('end', () => shutdownDesktop(0));
+  process.stdin.resume();
+}
 
 function desktopUsesSetup() {
   return !!desktopRoot && fs.existsSync(path.join(desktopRoot, 'installation.ini'));
@@ -4719,6 +4742,7 @@ app.post('/api/admin/update-status/install', requireAuth, requireAdmin, asyncRou
   }
   if (desktopUpdating) return res.status(409).json({ error: '正在安装更新。' });
   desktopUpdating = true;
+  desktopUpdateProgress = null;
   try {
     const latest = await getLatestRelease(true);
     if (updateCheckCache.error || !desktopUpdateAsset(latest) || req.body?.version !== latest.version ||
@@ -4727,20 +4751,24 @@ app.post('/api/admin/update-status/install', requireAuth, requireAdmin, asyncRou
       return res.status(409).json({ error: '更新版本已变化，请重新检查更新。' });
     }
     const useSetup = desktopUsesSetup();
-    if (useSetup) await stageSetup(desktopRoot, latest.setup);
+    if (useSetup) {
+      desktopUpdateProgress = { received: 0, total: latest.setup.size };
+      await stageSetup(desktopRoot, latest.setup, fetch, (received, total) => {
+        desktopUpdateProgress = { received, total };
+      });
+    }
     else await installRelease(desktopRoot, KEPT_VERSION, latest);
+    const restart = () => shutdownDesktop(useSetup ? SETUP_EXIT_CODE : RESTART_EXIT_CODE);
+    if (res.destroyed) return restart();
+    res.set('Connection', 'close');
+    res.once('finish', restart);
+    res.once('close', restart);
     res.json({ version: latest.version });
-    setImmediate(() => {
-      realtimeClients.forEach(sockets => sockets.forEach(socket => socket.terminate()));
-      server.close(() => db.close(error => {
-        if (error) console.error('Fynote update: database close failed', error);
-        process.exit(useSetup ? SETUP_EXIT_CODE : RESTART_EXIT_CODE);
-      }));
-    });
   } catch (error) {
     desktopUpdating = false;
+    desktopUpdateProgress = null;
     console.error('Fynote update failed:', error.message);
-    res.status(502).json({ error: '下载或安装更新失败，当前版本仍可使用。' });
+    res.status(502).json({ error: '更新失败：' + error.message });
   }
 }));
 

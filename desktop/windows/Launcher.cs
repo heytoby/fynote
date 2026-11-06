@@ -41,14 +41,15 @@ internal static class FynoteLauncher
                 int previousPort = ReadPort(portFile);
                 if (!ownsMutex)
                 {
-                    if (previousPort > 0 && WaitForReady(previousPort, null, null)) OpenWindow(previousPort, profile);
+                    if (previousPort > 0 && WaitForReady(previousPort, null, null))
+                        OpenWindow(root, ReadVersion(root), previousPort, profile).Dispose();
                     else throw new InvalidOperationException("Fynote 正在启动，请稍后再打开。");
                     return;
                 }
 
                 int port = ReservePort(previousPort);
                 File.WriteAllText(portFile, port.ToString(), new UTF8Encoding(false));
-                bool openWindow = true;
+
                 while (true)
                 {
                     string stateFile = Path.Combine(root, "current.json");
@@ -66,7 +67,7 @@ internal static class FynoteLauncher
                                 server.WaitForExit();
                             }
                             if (previousVersion == null || previousVersion == version ||
-                                !Directory.Exists(Path.Combine(root, "versions", previousVersion)))
+                                !File.Exists(Path.Combine(root, "versions", previousVersion, "window", "electron.exe")))
                                 throw new InvalidOperationException("本地服务未能启动。");
                             string rollback = stateFile + ".rollback";
                             File.WriteAllText(rollback, Json.Serialize(new { version = previousVersion }), new UTF8Encoding(false));
@@ -74,12 +75,36 @@ internal static class FynoteLauncher
                             MessageBox.Show("新版启动失败，已切回版本 " + previousVersion + "。", "Fynote");
                             continue;
                         }
-                        if (openWindow)
+                        Process startedWindow;
+                        try { startedWindow = OpenWindow(root, version, port, profile); }
+                        catch
                         {
-                            OpenWindow(port, profile);
-                            openWindow = false;
+                            server.StandardInput.Close();
+                            if (!server.WaitForExit(15000)) server.Kill();
+                            throw;
                         }
-                        server.WaitForExit();
+                        using (Process window = startedWindow)
+                        {
+                            while (!server.WaitForExit(250) && !window.HasExited) {}
+                            if (!server.HasExited)
+                            {
+                                server.StandardInput.Close();
+                                if (!server.WaitForExit(15000))
+                                {
+                                    server.Kill();
+                                    server.WaitForExit();
+                                }
+                            }
+                            if (!window.HasExited)
+                            {
+                                window.CloseMainWindow();
+                                if (!window.WaitForExit(5000))
+                                {
+                                    window.Kill();
+                                    window.WaitForExit();
+                                }
+                            }
+                        }
                         if (server.ExitCode == SetupExitCode)
                         {
                             try
@@ -132,11 +157,11 @@ internal static class FynoteLauncher
 
             var metadata = FileVersionInfo.GetVersionInfo(setup);
             var version = new System.Version(metadata.FileMajorPart, metadata.FileMinorPart, metadata.FileBuildPart);
-            if (metadata.ProductName != "Fynote Installer" || version.CompareTo(new System.Version(previous)) <= 0)
+            if ((metadata.ProductName ?? "").Trim() != "Fynote Installer" || version.CompareTo(new System.Version(previous)) <= 0)
                 throw new InvalidDataException("安装程序名称或版本不符。");
 
             using (Process installer = Process.Start(new ProcessStartInfo(setup,
-                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=\"" + root.TrimEnd(Path.DirectorySeparatorChar) + "\"")
+                "/SILENT /SUPPRESSMSGBOXES /NORESTART /DIR=\"" + root.TrimEnd(Path.DirectorySeparatorChar) + "\"")
             { UseShellExecute = true }))
             {
                 installer.WaitForExit();
@@ -175,11 +200,13 @@ internal static class FynoteLauncher
         start.WorkingDirectory = Path.Combine(payload, "app");
         start.UseShellExecute = false;
         start.CreateNoWindow = true;
+        start.RedirectStandardInput = true;
         start.EnvironmentVariables["NODE_ENV"] = "production";
         start.EnvironmentVariables["PORT"] = port.ToString();
         start.EnvironmentVariables["DATA_DIR"] = Path.Combine(profile, "data");
         start.EnvironmentVariables["BASE_URL"] = Address(port);
         start.EnvironmentVariables["FYNOTE_DESKTOP_ROOT"] = root;
+        start.EnvironmentVariables["FYNOTE_CLOSE_ON_STDIN_END"] = "1";
         return Process.Start(start);
     }
 
@@ -233,26 +260,18 @@ internal static class FynoteLauncher
         return false;
     }
 
-    private static void OpenWindow(int port, string profile)
+    private static string ReadVersion(string root)
     {
-        foreach (var directory in new[] {
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
-        })
-        {
-            string edge = Path.Combine(directory, "Microsoft", "Edge", "Application", "msedge.exe");
-            if (!File.Exists(edge)) continue;
-            string arguments = "--app=" + Address(port) + " --user-data-dir=\"" + Path.Combine(profile, "WebViewProfile") + "\" --no-first-run";
-            var area = Screen.PrimaryScreen.WorkingArea;
-            int width = Math.Min(1160, area.Width);
-            int height = Math.Min(820, area.Height);
-            int x = area.Left + (area.Width - width) / 2;
-            int y = area.Top + (area.Height - height) / 2;
-            arguments += " --window-size=" + width + "," + height + " --window-position=" + x + "," + y;
-            Process.Start(new ProcessStartInfo(edge, arguments) { UseShellExecute = false });
-            return;
-        }
-        Process.Start(new ProcessStartInfo(Address(port)) { UseShellExecute = true });
+        var state = Json.Deserialize<Dictionary<string, string>>(File.ReadAllText(Path.Combine(root, "current.json")));
+        return ValidVersion(state, "version");
+    }
+
+    private static Process OpenWindow(string root, string version, int port, string profile)
+    {
+        if (version == null) throw new InvalidDataException("找不到 Fynote 版本信息。");
+        string runtime = Path.Combine(root, "versions", version, "window", "electron.exe");
+        if (!File.Exists(runtime)) throw new FileNotFoundException("缺少 Fynote 窗口组件，请重新安装。");
+        string arguments = "--fynote-port=" + port + " --fynote-profile=\"" + Path.Combine(profile, "FynoteDesktopProfile") + "\"";
+        return Process.Start(new ProcessStartInfo(runtime, arguments) { UseShellExecute = false });
     }
 }

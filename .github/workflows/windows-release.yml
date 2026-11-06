@@ -53,7 +53,6 @@ jobs:
         with:
           name: fynote-windows
           path: |
-            ${{ runner.temp }}/fynote-release/*.zip
             ${{ runner.temp }}/fynote-release/*.exe
           if-no-files-found: error
 
@@ -79,6 +78,6 @@ jobs:
             echo "Release $tag already exists."
             exit 0
           fi
-          gh release create "$tag" "release/fynote-Setup-$RELEASE_VERSION.exe" "release/fynote-$RELEASE_VERSION-windows-x64.zip" \
+          gh release create "$tag" "release/fynote-Setup-$RELEASE_VERSION.exe" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Fynote $RELEASE_VERSION" --generate-notes --latest

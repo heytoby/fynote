@@ -1,10 +1,10 @@
 # Fynote
 
-Fynote 是基于 [Kept](https://github.com/ericerkz/kept) 的中文卡片笔记应用，提供 Windows 便携版与自托管网页端。原始项目和本项目均采用 AGPL-3.0-only，版权声明见 [LICENCE.MD](LICENCE.MD)。
+Fynote 是基于 [Kept](https://github.com/ericerkz/kept) 的中文卡片笔记应用，提供 Windows 安装版与自托管网页端。原始项目和本项目均采用 AGPL-3.0-only，版权声明见 [LICENCE.MD](LICENCE.MD)。
 
-Windows 版从 [GitHub Releases](https://github.com/heytoby/fynote/releases) 下载。首次从旧版升级时，退出旧版，完整解压新版后运行 `fynote.exe`。笔记保存在 `%LOCALAPPDATA%\Kept\data`。从 1.9.4 起，可在设置的「软件更新」里检查并安装后续版本。
+Windows 版从 [GitHub Releases](https://github.com/heytoby/fynote/releases) 下载。从 1.9.6 或更早版本升级时，先退出旧版，再运行新的 Windows EXE 安装包。Windows 版使用随包附带的独立窗口。笔记保存在 `%LOCALAPPDATA%\Kept\data`。安装后，可在设置的「软件更新」里检查并安装后续版本。
 
-使用 Node.js 24 安装依赖并运行 `npm run build`。在 Windows 上运行 `pwsh -File scripts/package-windows.ps1 -OutputDirectory release` 打包。仓库默认分支上的版本变更会触发 Windows 构建和 Release 发布。
+使用 Node.js 24 安装依赖并运行 `npm run build`。在 Windows 上运行 `pwsh -File scripts/package-windows.ps1 -OutputDirectory release -BuildInstaller` 打包。仓库默认分支上的版本变更会触发 Windows 构建和 Release 发布。
 
 ---
 

@@ -1,5 +1,5 @@
 import { Component, Input, OnInit } from '@angular/core';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import { HttpClient } from '@angular/common/http';
 import { AuthService } from 'src/app/services/auth.service';
 import { ManagedHostingService } from 'src/app/services/managed-hosting.service';
@@ -14,6 +14,7 @@ interface UpdateStatus {
   isOutdated: boolean;
   desktop: boolean;
   canInstall: boolean;
+  updateProgress?: { received: number; total: number } | null;
   suppressed: boolean;
   dismissedForever: boolean;
   dismissedUntil: string | null;
@@ -82,12 +83,26 @@ export class UpdateBannerComponent implements OnInit {
   async installUpdate() {
     if (this.installing || this.checking || !this.status?.canInstall || !this.status.latest) return;
     this.installing = true;
-    this.message = '正在下载并校验更新包。';
+    this.message = '正在连接 GitHub 下载更新包。';
+    const progress = setInterval(async () => {
+      try {
+        const update = await firstValueFrom(this.http.get<UpdateStatus>(
+          `${environment.apiUrl}/admin/update-status`,
+          { headers: this.auth.authHeaders() }
+        ).pipe(timeout(2500)));
+        const download = update.updateProgress;
+        if (this.installing && download?.total) {
+          const percent = Math.min(100, Math.floor(download.received / download.total * 100));
+          this.message = percent === 100 ? '下载完成，正在校验更新包。' : `正在下载更新包 ${percent}%`;
+        }
+      } catch { /* Keep the last progress while a status request is unavailable. */ }
+    }, 3000);
     try {
       const result = await firstValueFrom(
         this.http.post<{ version: string }>(`${environment.apiUrl}/admin/update-status/install`,
-          { version: this.status.latest }, { headers: this.auth.authHeaders() })
+          { version: this.status.latest }, { headers: this.auth.authHeaders() }).pipe(timeout(16 * 60_000))
       );
+      clearInterval(progress);
       this.message = '正在安装并重启 Fynote。';
       const deadline = Date.now() + 180_000;
       while (Date.now() < deadline) {
@@ -107,8 +122,10 @@ export class UpdateBannerComponent implements OnInit {
       this.message = '重启后暂未检测到新版。请重新打开 Fynote，再检查当前版本。';
     } catch (error) {
       const detail = (error as { error?: { error?: string } }).error?.error;
-      this.message = detail || '更新安装失败，请稍后重试。';
+      this.message = detail || (error instanceof Error && error.name === 'TimeoutError'
+        ? '下载等待超时，请检查网络后重试。' : '更新安装失败，请稍后重试。');
     } finally {
+      clearInterval(progress);
       this.installing = false;
     }
   }

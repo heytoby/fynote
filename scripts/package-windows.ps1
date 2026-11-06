@@ -57,6 +57,17 @@ Fynote $version · Windows x64
         Pop-Location
     }
 
+    $electronVersion = '45.2.3'
+    $electronArchive = Join-Path $stage 'electron.zip'
+    $electronUrl = "https://github.com/electron/electron/releases/download/v$electronVersion/electron-v$electronVersion-win32-x64.zip"
+    Invoke-WebRequest -Uri $electronUrl -OutFile $electronArchive -TimeoutSec 180
+    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $electronArchive).Hash -ne '489cd061908e697394b004298bf5ffd345c935d10e8ca197ba819f019ab2dec0') {
+        throw 'Electron runtime checksum mismatch.'
+    }
+    $windowRuntime = Join-Path $payload 'window'
+    Expand-Archive -LiteralPath $electronArchive -DestinationPath $windowRuntime
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'desktop\windows\window') -Destination (Join-Path $windowRuntime 'resources\app') -Recurse
+
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
     $launcher = Join-Path $packageRoot 'fynote.exe'
     $compilerArgs = @(
@@ -77,12 +88,14 @@ Fynote $version · Windows x64
     $probe.WorkingDirectory = $app
     $probe.UseShellExecute = $false
     $probe.CreateNoWindow = $true
+    $probe.RedirectStandardInput = $true
     $probe.EnvironmentVariables['NODE_ENV'] = 'production'
     $probe.EnvironmentVariables['PORT'] = [string]$port
     $probe.EnvironmentVariables['BASE_URL'] = $address
     $probe.EnvironmentVariables['DATA_DIR'] = Join-Path $stage 'smoke-data'
     $probe.EnvironmentVariables['FYNOTE_DESKTOP_ROOT'] = $packageRoot
     $probe.EnvironmentVariables['KEPT_TEST_MODE'] = '1'
+    $probe.EnvironmentVariables['FYNOTE_CLOSE_ON_STDIN_END'] = '1'
     $server = [Diagnostics.Process]::Start($probe)
     try {
         $ready = $false
@@ -101,19 +114,36 @@ Fynote $version · Windows x64
         if ($homeResponse.StatusCode -ne 200 -or $homeResponse.Content -notmatch '<app-root') {
             throw 'The packaged frontend did not load.'
         }
+        $windowProbe = Start-Process -FilePath (Join-Path $windowRuntime 'electron.exe') -ArgumentList @(
+            "--fynote-port=$port", ('--fynote-profile="' + (Join-Path $stage 'window-smoke') + '"'), '--fynote-smoke'
+        ) -PassThru
+        try {
+            if (-not $windowProbe.WaitForExit(30000)) {
+                $windowProbe.Kill()
+                $windowProbe.WaitForExit()
+                throw 'The packaged desktop window timed out.'
+            }
+            if ($windowProbe.ExitCode -ne 0) { throw "The desktop window failed to load ($($windowProbe.ExitCode))." }
+        } finally { $windowProbe.Dispose() }
+        $server.StandardInput.Close()
+        if (-not $server.WaitForExit(15000) -or $server.ExitCode -ne 0) {
+            throw 'The packaged server did not shut down cleanly.'
+        }
     } finally {
         if (-not $server.HasExited) { $server.Kill(); $server.WaitForExit() }
         $server.Dispose()
     }
 
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetFullPath($OutputDirectory))
-    $archiveName = "fynote-$version-windows-x64.zip"
-    $archive = [IO.Path]::GetFullPath((Join-Path $OutputDirectory $archiveName))
-    $temporaryArchive = Join-Path $stage $archiveName
-    Add-Type -AssemblyName System.IO.Compression.ZipFile
-    [IO.Compression.ZipFile]::CreateFromDirectory($packageRoot, $temporaryArchive, [IO.Compression.CompressionLevel]::Optimal, $true)
-    [IO.File]::Move($temporaryArchive, $archive)
-    Write-Output $archive
+    if (-not $BuildInstaller) {
+        $archiveName = "fynote-$version-windows-x64.zip"
+        $archive = [IO.Path]::GetFullPath((Join-Path $OutputDirectory $archiveName))
+        $temporaryArchive = Join-Path $stage $archiveName
+        Add-Type -AssemblyName System.IO.Compression.ZipFile
+        [IO.Compression.ZipFile]::CreateFromDirectory($packageRoot, $temporaryArchive, [IO.Compression.CompressionLevel]::Optimal, $true)
+        [IO.File]::Move($temporaryArchive, $archive)
+        Write-Output $archive
+    }
 
     if ($BuildInstaller) {
         $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
@@ -123,6 +153,10 @@ Fynote $version · Windows x64
         if ($LASTEXITCODE -ne 0) { throw "Installer compile failed ($LASTEXITCODE)." }
 
         $installer = Join-Path $OutputDirectory "fynote-Setup-$version.exe"
+        $installerMetadata = [Diagnostics.FileVersionInfo]::GetVersionInfo([IO.Path]::GetFullPath($installer))
+        if ($installerMetadata.ProductName.Trim() -ne 'Fynote Installer' -or $installerMetadata.FileVersion.Trim() -ne $version) {
+            throw 'Installer metadata does not match the updater requirements.'
+        }
         $installProbe = Join-Path $stage 'installed'
         $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="' + $installProbe + '"')) -Wait -PassThru
         if ($setup.ExitCode -ne 0 -or -not (Test-Path (Join-Path $installProbe 'fynote.exe'))) {

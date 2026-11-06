@@ -133,7 +133,11 @@ test('installed Windows updates stage only the verified release EXE', async t =>
   const destination = path.join(root, '.update', 'setup.exe');
   await assert.rejects(stageSetup(root, release.setup, async () => new Response(Buffer.alloc(bytes.length))), /校验失败/);
   await assert.rejects(files.stat(destination), { code: 'ENOENT' });
-  await stageSetup(root, release.setup, async () => new Response(bytes));
+  const progress = [];
+  await stageSetup(root, release.setup, async () => new Response(bytes), (received, total) => {
+    progress.push({ received, total });
+  });
+  assert.deepEqual(progress.at(-1), { received: bytes.length, total: bytes.length });
   assert.deepEqual(await files.readFile(destination), bytes);
   assert.deepEqual(await selectedVersion(root), { version: current });
 });
