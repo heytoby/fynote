@@ -1,0 +1,46 @@
+@if (manual) {
+  <p>当前版本 <strong>{{ status?.current || '—' }}</strong></p>
+  <div class="update-banner__actions">
+    <button type="button" class="update-banner__btn" (click)="checkForUpdates()" [disabled]="checking || installing">
+      {{ checking ? '正在检查…' : '检查更新' }}
+    </button>
+    @if (status?.canInstall) {
+      <button type="button" class="update-banner__btn update-banner__btn--primary" (click)="installUpdate()" [disabled]="checking || installing">
+        {{ installing ? '正在更新…' : '安装并重启' }}
+      </button>
+    }
+    @if (status?.isOutdated && status?.releaseUrl) {
+      <a [href]="status?.releaseUrl" target="_blank" rel="noopener noreferrer" class="update-banner__btn">查看发布说明</a>
+    }
+  </div>
+  <p aria-live="polite">{{ message }}</p>
+} @else if (visible) {
+  <div class="update-banner" role="status">
+    <div class="update-banner__content">
+      <span class="update-banner__icon material-symbols-outlined" aria-hidden="true">system_update</span>
+      <div class="update-banner__text">
+        <strong>Fynote 有新版本。</strong>
+        <span>You're on <code>{{status?.current}}</code>. Latest is <code>{{status?.latest}}</code>.</span>
+      </div>
+      <div class="update-banner__actions">
+        @if (status?.releaseUrl) {
+          <a [href]="status?.releaseUrl" target="_blank" rel="noopener" class="update-banner__btn update-banner__btn--primary">View release</a>
+        }
+        @if (status?.releaseNotes) {
+          <button type="button" class="update-banner__btn" (click)="toggleNotes($event)">
+            {{ showNotes ? 'Hide notes' : 'Release notes' }}
+          </button>
+        }
+        <button type="button" class="update-banner__btn" (click)="dismiss(false)" title="Hide for 30 days">
+          Remind me later
+        </button>
+        <button type="button" class="update-banner__btn update-banner__btn--ghost" (click)="dismiss(true)" title="Don't remind me about this version again">
+          Don't remind me
+        </button>
+      </div>
+    </div>
+    @if (showNotes && status?.releaseNotes) {
+      <pre class="update-banner__notes">{{status?.releaseNotes}}</pre>
+    }
+  </div>
+}
