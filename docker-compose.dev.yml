@@ -1,0 +1,6 @@
+services:
+  kept:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kept-local:dev

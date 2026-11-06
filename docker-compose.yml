@@ -1,0 +1,127 @@
+services:
+  kept:
+    image: ghcr.io/ericerkz/kept:latest
+    container_name: kept-app
+    ports:
+      - "6767:6767"
+    environment:
+      - NODE_ENV=production
+      - PORT=6767
+      - SQLITE_PATH=/app/data/kept.sqlite
+
+      # Pass the host user's UID/GID into the container so files in ./data
+      # are owned by you on the host (no sudo needed for backups). $UID is
+      # automatically set by most Linux/macOS shells; $GID is not always set,
+      # so we fall back to UID (single-user accounts almost always have
+      # primary GID == UID). The entrypoint also auto-detects from the data
+      # directory's existing owner if these are unset, so this is a safety
+      # net rather than a hard requirement.
+      - PUID=${UID:-1000}
+      - PGID=${GID:-1000}
+
+      # ── OPTIONAL security/operational options  ────────────────────────────
+
+      # Public base URL the server thinks it's at. Required for remote MCP/OAuth
+      # and OIDC sign-in; otherwise only needed when proxy forwarding headers
+      # do not describe the public origin correctly. Use the origin only.
+      # - BASE_URL=https://kept.example.com
+
+      # Optional OpenID Connect single sign-on. Register this callback at the
+      # provider: https://kept.example.com/api/auth/oidc/callback
+      # - KEPT_OIDC_ISSUER=https://id.example.com
+      # - KEPT_OIDC_CLIENT_ID=kept
+      # - KEPT_OIDC_CLIENT_SECRET=
+      # - KEPT_OIDC_NAME=Single sign-on
+      # - KEPT_OIDC_SCOPES=openid profile email
+      # Optional: require SSO after configuring OIDC and linking/testing all
+      # users, including an enabled administrator. See docs/oidc.md for recovery.
+      # - KEPT_DISABLE_PASSWORD_LOGIN=1
+      # Existing users connect their provider account from Settings. New users
+      # can register through OIDC if self-registration is enabled. Accounts are
+      # never linked by matching email addresses.
+
+      # Allow restoring a SQLite backup via /api/setup/restore. This should really only be enabled when you actually need it
+      # (lost access to account/forgotten password/failed TOTP, etc.), 
+      # then unset. 
+      # If left enabled, anyone with an auth token could restore a backup and overwrite your data.
+      # Set to "1" only when you actually need to perform a restore, then unset.
+      # - KEPT_ALLOW_RESTORE=1
+
+      # Session lifetime in days (default 30). Lower = more re-auth, more
+      # damage-control if a token is stolen.
+      # - KEPT_SESSION_TTL_DAYS=30
+
+      # ── CORS (cross-origin requests) ─────────────────────────────────────
+      # Browser sessions use HttpOnly cookies; same-origin access needs no CORS.
+      # If neither CORS option is set, exact native app origins are allowed
+      # automatically without cookie credentials, so iOS/Android can connect.
+      # Native/API clients continue to use Bearer tokens. Wildcard mode supports
+      # those clients, but browser cookie requests to a separate SPA origin need
+      # the explicit allowlist below and a same-site API.
+      #
+      # Allow any origin (easy mode for personal self-hosting):
+      - KEPT_CORS_ALLOW_ALL=1
+      #
+      # Tradeoff: any website can hit your unauth endpoints
+      # (/api/setup/status, login, register) from a browser. Authenticated
+      # native/API calls still require a valid Bearer token. Wildcard mode
+      # does not grant permission to read cookie-authenticated responses.
+      #
+      # To pin specific origins instead, comment out KEPT_CORS_ALLOW_ALL above
+      # and uncomment KEPT_CORS_ORIGINS below. Comma-separated, no spaces, no
+      # trailing slashes, scheme + host (+ port if non-default):
+      # - KEPT_CORS_ORIGINS=https://kept.example.com,https://app.example.com
+      #
+      # By default and when KEPT_CORS_ORIGINS is used, Kept allows exact native app
+      # WebView origins (capacitor://localhost, ionic://localhost, and
+      # localhost variants) so iOS/Android apps can connect.
+      #
+      # Localhost dev / LAN / mixed examples:
+      # - KEPT_CORS_ORIGINS=http://localhost:4200,http://localhost:6767
+      # - KEPT_CORS_ORIGINS=http://192.168.1.50:6767,https://kept.example.com
+      # - KEPT_CORS_ORIGINS=https://kept.example.com,http://kept.local
+      #
+      # If both KEPT_CORS_ALLOW_ALL and KEPT_CORS_ORIGINS are set, the
+      # allowlist takes precedence.
+      #
+      # Cookie-authenticated realtime connections also check the browser origin
+      # against BASE_URL (or the request host) and KEPT_CORS_ORIGINS.
+      # For realtime to work, your reverse proxy must support
+      # WebSocket upgrades and forward /api/realtime to this container.
+
+      # VAPID keys for web push. Auto-generated into ./data/vapid.json on
+      # first run if not set. Override here if you want to manage them yourself.
+      # - VAPID_PUBLIC_KEY=
+      # - VAPID_PRIVATE_KEY=
+      # - VAPID_SUBJECT=https://kept.example.com
+
+      # Outgoing CalDAV and web-push requests block private destinations by
+      # default. For trusted internal services only, list exact origins
+      # (scheme + host + port; no paths, wildcards, or embedded credentials).
+      # These exceptions apply to all accounts, not incoming Kept connections.
+      # CalDAV supports HTTP/HTTPS; push requires HTTPS with a valid certificate.
+      # - KEPT_CALDAV_ALLOWED_PRIVATE_ORIGINS=http://calendar:5232
+      # - KEPT_PUSH_ALLOWED_PRIVATE_ORIGINS=https://push.internal:8443
+
+      # Google Takeout import ZIP cap. Default is 5GB and applies only to
+      # Google Keep Takeout imports, not normal note images or attachments.
+      # Large uploads may still be limited by Cloudflare/Nginx/etc.; import
+      # directly over LAN/SSH or raise proxy body-size/timeouts if needed.
+      # - KEPT_TAKEOUT_UPLOAD_MAX=5GB
+
+      # ── Invite users by email (optional) ────────────────────────────────
+      # Admins can always create accounts directly. Setting this lets an
+      # admin additionally turn on "Invite by email" in User Management, so
+      # new users set their own username/password via an emailed link.
+      # Leave KEPT_SMTP_HOST unset and no invite-by-email UI appears at all.
+      # See README.md#inviting-users-by-email-optional for details.
+      # - KEPT_SMTP_HOST=
+      # - KEPT_SMTP_PORT=587
+      # - KEPT_SMTP_SECURE=0
+      # - KEPT_SMTP_USER=
+      # - KEPT_SMTP_PASS=
+      # - KEPT_SMTP_FROM=Kept <no-reply@example.com>
+
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

@@ -1,0 +1,68 @@
+import { APP_INITIALIZER, NgModule } from '@angular/core';
+import { BrowserModule } from '@angular/platform-browser';
+import { FormsModule } from '@angular/forms';
+import { HTTP_INTERCEPTORS, provideHttpClient, withInterceptorsFromDi } from '@angular/common/http';
+import { AppComponent } from './app.component';
+import { MainComponent } from './components/main/main.component';
+import { NavComponent } from './components/sidenav/sidenav.component';
+import { CatalogReorderDirective } from './components/sidenav/catalog-reorder.directive';
+import { NavbarComponent } from './components/navbar/navbar.component';
+import { NotesComponent } from './components/notes/notes.component';
+import { InputComponent } from './components/input/input.component';
+import { ph } from './pipes/ph.pipe';
+import { AppRoutingModule } from './app-routing.module';
+import { CboxSortPipe } from './pipes/cbox-sort.pipe';
+import { CboxDonePipe } from './pipes/cbox-done.pipe';
+import { NotesToolsPipe } from './pipes/notes-tools.pipe';
+import { SetupComponent } from './components/auth/setup/setup.component';
+import { LoginComponent } from './components/auth/login/login.component';
+import { UserManagementComponent } from './components/auth/user-management/user-management.component';
+import { RegisterComponent } from './components/auth/register/register.component';
+import { InviteAcceptComponent } from './components/auth/invite-accept/invite-accept.component';
+import { SettingsComponent } from './components/settings/settings.component';
+import { ReminderNotificationComponent } from './components/reminder/reminder-notification.component';
+import { LinkPreviewComponent } from './components/link-preview/link-preview.component';
+import { UpdateBannerComponent } from './components/update-banner/update-banner.component';
+import { ManagedNoticeBannerComponent } from './components/managed-notice-banner/managed-notice-banner.component';
+import { MergeDialogComponent } from './components/merge-dialog/merge-dialog.component';
+import { AuthExpiredInterceptor } from './services/auth-expired.interceptor';
+import { AuthService } from './services/auth.service';
+import { WelcomeComponent } from './components/auth/welcome/welcome.component';
+import { ConnectionHeadersInterceptor } from './services/connection-headers.interceptor';
+import { LocationMapPickerComponent } from './components/location-map-picker/location-map-picker.component';
+
+@NgModule({ declarations: [
+        AppComponent,
+        WelcomeComponent,
+        MainComponent,
+        NavComponent,
+        CatalogReorderDirective,
+        NavbarComponent,
+        NotesComponent,
+        InputComponent,
+        LocationMapPickerComponent,
+        ph,
+        CboxSortPipe,
+        CboxDonePipe,
+        NotesToolsPipe,
+        SetupComponent,
+        LoginComponent,
+        UserManagementComponent,
+        RegisterComponent,
+        InviteAcceptComponent,
+        SettingsComponent,
+        ReminderNotificationComponent,
+        LinkPreviewComponent,
+        UpdateBannerComponent,
+        ManagedNoticeBannerComponent,
+        MergeDialogComponent,
+    ],
+    bootstrap: [AppComponent], imports: [BrowserModule,
+        FormsModule,
+        AppRoutingModule], providers: [
+        { provide: APP_INITIALIZER, useFactory: (auth: AuthService) => () => auth.initializeBrowserSession(), deps: [AuthService], multi: true },
+        { provide: HTTP_INTERCEPTORS, useClass: ConnectionHeadersInterceptor, multi: true },
+        { provide: HTTP_INTERCEPTORS, useClass: AuthExpiredInterceptor, multi: true },
+        provideHttpClient(withInterceptorsFromDi())
+    ] })
+export class AppModule { }

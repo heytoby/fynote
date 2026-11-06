@@ -1,0 +1,5419 @@
+import { MAX_FILE_BYTES, isNoteImageFile } from '../../utils/note-images';
+import { createNoteHtmlContainer, sanitizeNoteHtml } from '../../utils/note-html';
+import { htmlToMarkdown, markdownToHtml } from '../../utils/markdown';
+import { NoteI, CheckboxI, NoteImageI, NoteAttachmentI } from '../../interfaces/notes';
+import { Component, OnInit, ViewChild, ElementRef, ChangeDetectorRef, Input, HostBinding, HostListener } from '@angular/core';
+import { Router } from '@angular/router';
+import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+
+import { bgImages, bgColors } from 'src/app/interfaces/tooltip';
+import { SharedService, type WidgetCreateRequest } from 'src/app/services/shared.service';
+import { BehaviorSubject, Subscription, Subject } from 'rxjs';
+import { debounceTime } from 'rxjs/operators';
+import { LabelI } from 'src/app/interfaces/labels';
+import { AuthService } from 'src/app/services/auth.service';
+import { ShareUserI } from 'src/app/interfaces/users';
+import { LinkPreviewData, NotesService } from 'src/app/services/notes.service';
+import { PushNotificationService } from 'src/app/services/push-notification.service';
+import { ReminderService } from 'src/app/services/reminder.service';
+import { ReminderRepeatRule, ReminderRepeatType } from 'src/app/interfaces/reminder';
+import { KeptPluginsService, type ResolvedLocation } from 'src/app/services/kept-plugins.service';
+import { LocationSavedPlacesService, type LocationSavedPlace, type LocationTrigger, type SavedPlaceType } from 'src/app/services/location-saved-places.service';
+import { NgZone } from '@angular/core';
+import { TimepickerUI, type ConfirmEventData } from 'timepicker-ui';
+import { isNativePhonePlatform, shouldUseFullscreenNoteEditor } from 'src/app/utils/platform';
+import { NoteLockService } from 'src/app/services/note-lock.service';
+import { UserPreferencesService } from 'src/app/services/user-preferences.service';
+import { ensureTimepickerWheelPlugin } from 'src/app/utils/timepicker-wheel';
+import { MAX_INDENT_LEVEL, descendantIndexes, maxIndentLevelAt, normalizeIndentLevel, normalizeIndentLevels } from 'src/app/utils/checkbox-indent';
+import { environment } from 'src/environments/environment';
+import { createUuid } from 'src/app/utils/uuid';
+import type { LocationPin } from '../location-map-picker/location-map-picker.component';
+
+declare var Snackbar: any;
+type InputLengthI = { title?: number, body?: number, cb?: number }
+type DrawingTool = 'select' | 'pen' | 'marker' | 'highlighter' | 'eraser'
+type DrawingPoint = { x: number, y: number }
+type DrawingSelection = { x: number, y: number, w: number, h: number }
+type PlaceDialogView = 'choose' | 'manage' | 'add' | 'search'
+type PlaceListItem = LocationSavedPlace | { id: 'home-prompt' | 'work-prompt'; name: string; address: string; placeType: SavedPlaceType; prompt: true }
+type EditorAppPlugin = {
+  addListener(event: 'pause' | 'appStateChange', callback: (state: { isActive?: boolean }) => void): Promise<PluginListenerHandle>
+};
+@Component({
+    selector: 'app-input',
+    templateUrl: './input.component.html',
+    styleUrls: ['./input.component.scss'],
+    standalone: false
+})
+export class InputComponent implements OnInit {
+  @HostBinding('class.mobile-active') get isMobileActive() {
+    return this.mobileComposeMode;
+  }
+  @HostBinding('class.native-phone-layout') get nativePhoneLayout() {
+    return isNativePhonePlatform();
+  }
+
+  constructor(private cd: ChangeDetectorRef, public Shared: SharedService, public auth: AuthService, private notesService: NotesService, private push: PushNotificationService, private reminderService: ReminderService, public keptPlugins: KeptPluginsService, private savedPlacesService: LocationSavedPlacesService, private zone: NgZone, private router: Router, public noteLock: NoteLockService, public preferences: UserPreferencesService, private hostElement: ElementRef<HTMLElement>) { }
+
+  @ViewChild("main") main!: ElementRef<HTMLDivElement>
+  //? Placeholder  ----------------------------------------------------
+  @ViewChild("notePlaceholder") notePlaceholder!: ElementRef<HTMLDivElement>
+  //? note  -----------------------------------------------------
+  @ViewChild("noteMain") noteMain!: ElementRef<HTMLDivElement>
+  @ViewChild("noteContainer") noteContainer!: ElementRef<HTMLDivElement>
+  @ViewChild("noteTitle") noteTitle!: ElementRef<HTMLDivElement>
+  @ViewChild("noteBody") noteBody?: ElementRef<HTMLDivElement>
+  @ViewChild("markdownEditor") markdownEditor?: ElementRef<HTMLTextAreaElement>
+  @ViewChild("notePin") notePin!: ElementRef<HTMLDivElement>
+  @ViewChild("imageInput") imageInput!: ElementRef<HTMLInputElement>
+  @ViewChild("attachmentInput") attachmentInput!: ElementRef<HTMLInputElement>
+  @ViewChild("drawingCanvas") drawingCanvas?: ElementRef<HTMLCanvasElement>
+  @ViewChild("drawingWrap") drawingWrap?: ElementRef<HTMLDivElement>
+  //? checkbox  -----------------------------------------------------
+  @ViewChild("cboxInput") cboxInput!: ElementRef<HTMLDivElement>
+  @ViewChild("cboxPh") cboxPh?: ElementRef<HTMLDivElement>
+  @ViewChild("moreMenuTtBtn") moreMenuTtBtn?: ElementRef<HTMLDivElement> // needed in the html
+  //? -----------------------------------------------------
+  @Input() isEditing = false
+  @Input() noteToEdit: NoteI = {} as NoteI
+  @Input() autoOpenImagePicker = false
+  //? -----------------------------------------------------
+  checkBoxes: CheckboxI[] = []
+  images: NoteImageI[] = []
+  attachments: NoteAttachmentI[] = []
+  pendingAttachmentFiles: File[] = []
+  isUploadingAttachment = false
+  readonly attachmentAccept = [
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.txt', '.csv', '.md', '.json', '.xml',
+    '.zip', '.rar', '.7z', '.gz', '.tar',
+    '.odt', '.ods', '.odp'
+  ].join(',')
+  labels: LabelI[] = []
+  private labelsDirty = false
+  binderName = ''
+  binderMenuError = ''
+  isArchived = false
+  isTrashed = false
+  isCboxCompletedListCollapsed = false
+  showTextFormatting = false
+  showSelectionFormatting = false
+  markdownSourceMode = false
+  markdownSource = ''
+  selectionFormattingStyle: Record<string, string> = {}
+  private textHistoryTarget?: HTMLElement
+  private textSelectionFrame?: number
+  private readonly textSelectionChangeHandler = () => this.scheduleSelectionFormattingUpdate()
+  private readonly textSelectionRepositionHandler = () => this.scheduleSelectionFormattingUpdate()
+  private cboxHistory: CheckboxI[][] = []
+  private cboxHistoryIndex = -1
+  private lastCboxStructuralChangeAt = 0
+  private lastCboxTextInputAt = 0
+  private cboxHistoryRedoMode = false
+  private cboxSuggestionEligibleIds = new Set<number>()
+  private cboxSuggestionDraftValues = new Map<number, string>()
+  private dismissedCboxSuggestionIds = new Set<number>()
+  activeCboxSuggestionRowId?: number
+  private cboxSuggestionBlurTimer?: ReturnType<typeof setTimeout>
+  isCbox = new BehaviorSubject<boolean>(false)
+  inputLength = new BehaviorSubject<InputLengthI>({ title: 0, body: 0, cb: 0 })
+  collaboratorUsers: ShareUserI[] = []
+  selectedCollaboratorIds: number[] = []
+  
+  // Reminder State
+  showReminderPicker = false
+  customPickerOpen = false
+  customDate = ''
+  customTime = ''
+  readonly calendarWeekdays = ['S', 'M', 'T', 'W', 'T', 'F', 'S']
+  calendarMonth = this.startOfMonth(new Date())
+  customTimePicker: any
+  customTimePickerInput?: HTMLInputElement
+  pendingReminderDate: Date | null = null
+  pendingReminderRepeatRule: ReminderRepeatRule | null = null
+  pendingReminderLocation: { locationName: string; latitude: number; longitude: number; radiusMeters: number; timezone: string; locationTrigger: LocationTrigger } | null = null
+  reminderRepeatType: ReminderRepeatType = 'none'
+  reminderRepeatCustomDays = 2
+  reminderMoveToTopOnTrigger = false
+  readonly reminderRepeatOptions: Array<{ value: ReminderRepeatType; label: string }> = [
+    { value: 'none', label: 'None' },
+    { value: 'daily', label: 'Daily' },
+    { value: 'weekly', label: 'Weekly' },
+    { value: 'monthly', label: 'Monthly' },
+    { value: 'custom_days', label: '...' }
+  ]
+  showReminderTypeDialog = false
+  showReminderDateDialog = false
+  showReminderLocationDialog = false
+  placeDialogView: PlaceDialogView = 'choose'
+  locationState: 'idle' | 'resolved' | 'ambiguous' | 'permission' | 'notFound' = 'idle'
+  locationPhrase = ''
+  resolvedLocation: ResolvedLocation | null = null
+  locationMapPreview = ''
+  showLocationMap = false
+  locationMapCenter: { latitude: number; longitude: number } | null = null
+  locationMapError = ''
+  mapPinName = ''
+  private locationMapRequest = 0
+  private locationSearchRequest = 0
+  candidates: ResolvedLocation[] = []
+  resolving = false
+  permissionReason = ''
+  showAndroidBackgroundLocationEducation = false
+  androidLocationEducationMode: 'foreground' | 'background' = 'background'
+  androidBackgroundLocationMessage = ''
+  savedPlaces: LocationSavedPlace[] = []
+  savedPlacesLoading = false
+  savedPlacesError = ''
+  savedPlacesSearch = ''
+  locationTrigger: LocationTrigger = 'arrive'
+  addPlaceName = ''
+  addPlaceType: SavedPlaceType = 'other'
+  addPlaceRadiusMeters = 100
+  addPlaceSaving = false
+  editingSavedPlace: LocationSavedPlace | null = null
+  private savedPlaceReturnView: 'choose' | 'manage' = 'choose'
+  swipingPlaceId: number | null = null
+  readonly savedPlaceTypes: SavedPlaceType[] = ['home', 'work', 'gym', 'other']
+  readonly savedPlaceRadii = [100, 250, 500, 1000]
+  currentLocation: { latitude: number; longitude: number } | null = null
+  currentLocationLoading = false
+  private placeSwipeStartPoint?: { id: number; x: number; y: number }
+  private placeSwipeMoved = false
+  private pendingAndroidLocationReminder: { location: ResolvedLocation; trigger: LocationTrigger } | null = null
+  private pendingAndroidLocationSearch: { view: PlaceDialogView; map?: boolean } | null = null
+  private androidBackgroundLocationResumeHandler?: () => void
+  private androidBackgroundLocationFocusHandler?: () => void
+  private androidBackgroundLocationResumeRunning = false
+  collaboratorError = ''
+  isSavingCollaborators = false
+  labelMenuError = ''
+  hasBackgroundImage = false
+  isDrawingNote = false
+  isDrawingFullscreen = false
+  // Set true when the loaded note has both a body and a checklist (hybrid note,
+  // typically from a merge). Latches for the session so the body stays
+  // visible even if the user momentarily clears it while editing.
+  isHybridNote = false
+  drawingTool: DrawingTool = 'pen'
+  drawingBackground: 'square' | 'dots' | 'rules' | 'none' = 'rules'
+  showDrawingBackgroundMenu = false
+  showDrawingMoreMenu = false
+  showDrawingEraserMenu = false
+  drawingOpenToolMenu?: 'pen' | 'marker' | 'highlighter'
+  drawingColors = ['#000000', '#ff4b55', '#ffb52e', '#20bf55', '#26a7df', '#bd10e0', '#8d6e63', '#ffffff', '#b3261e', '#f57c00', '#558b2f', '#0b5c99', '#8e24aa', '#4e342e', '#9eb0b9', '#f5367a', '#ff674d', '#aeea00', '#3454f4', '#6f4df6', '#35d7b7', '#d5e1e5', '#f8b5cf', '#ffc8b8', '#eef4bd', '#a8b7e8', '#d1c4e9', '#b2dfdb']
+  drawingSizes = [2, 4, 7, 10, 14, 19, 25]
+  drawingToolOptions = {
+    pen: { color: '#202124', size: 4 },
+    marker: { color: '#ff4b55', size: 7 },
+    highlighter: { color: '#fbbc04', size: 19 }
+  }
+  drawingSelection?: DrawingSelection
+  drawingSelectionStyle: Record<string, string> = {}
+  drawingHistory: string[] = []
+  drawingHistoryIndex = -1
+  private isDrawing = false
+  private drawingLastPoint?: DrawingPoint
+  private drawingResize?: ResizeObserver
+  private drawingSelectionStart?: DrawingPoint
+  private movingSelection?: { canvas: HTMLCanvasElement, offset: DrawingPoint, lastRect: DrawingSelection, handle?: string, aspectRatio?: number, fixedPoint?: DrawingPoint }
+  draggedInlineImage?: HTMLElement
+  draggedInlineObject?: HTMLElement
+  draggedCboxId?: number;
+  dragReadyCboxId?: number;
+  cboxDragOrderChanged = false;
+  cboxDragImage?: HTMLElement;
+  cboxDragImageOffset = { x: 0, y: 0 };
+  private cboxTouchTimer?: ReturnType<typeof setTimeout>;
+  private cboxTouchDragging = false;
+  private cboxTouchIsDone = false;
+  private cboxTouchStartX = 0;
+  private cboxTouchStartY = 0;
+  private cboxTouchIndentHandled = false;
+  private cboxTouchStartIndent = 0;
+  private pendingCboxFocusPoint?: { id: number, x: number, y: number };
+  private pendingCboxFocusRange?: Range;
+  private cboxTextTouch?: { id: number, x: number, y: number, moved: boolean, wasFocused: boolean, disabledEditing: boolean };
+  private lastCboxTouchToggleAt = 0;
+  activePointers: Map<number, { x: number, y: number }> = new Map();
+  drawingTransform = { scale: 1, x: 0, y: 0 };
+  private isPanning = false;
+  private initialPinchDistance?: number;
+  private initialPinchScale?: number;
+  private initialPinchMidpoint?: DrawingPoint;
+  private initialPinchTranslate?: { x: number, y: number };
+  activeEditors: any[] = [];
+  autoSaveSubject = new Subject<void>();
+  autoSaveSubscription?: Subscription;
+  coEditSubscription?: Subscription;
+  notesListSubscription?: Subscription;
+  mobileComposerSubscription?: Subscription;
+  widgetCreateSubscription?: Subscription;
+  closeMobileComposerSubscription?: Subscription;
+  preferencesSubscription?: Subscription;
+  private saveQueue: Promise<boolean | void> = Promise.resolve();
+  private editorGeneration = 0;
+  private newNoteId?: number;
+  private newNoteSyncId?: string;
+  private backgroundSaveHandles: PluginListenerHandle[] = [];
+  private lastBodyRange?: Range
+  private destroyed = false
+  private editorPreviewGeneration = 0
+  private editorLinkDecorationFrame?: number
+  private saveBaselineSnapshot?: string
+  private lastExternalUpdateSnapshot?: string
+  mobileComposeMode = false
+  mobileNewNoteStarterDismissed = false
+  lastEditedTime = ''
+  //
+  bgColors = bgColors
+  bgImages = bgImages
+  bgImageLabels: Record<string, string> = {
+    groceries: 'Groceries',
+    tasks: 'Errands',
+    movies: 'Movies',
+    cafes: 'Cafes',
+    romantic: 'Love',
+    gym: 'Gym',
+    recipes: 'Recipes',
+    travel: 'Travel',
+    study: 'Study',
+    ideas: 'Ideas',
+    meetings: 'Meetings',
+    budget: 'Budget',
+    zNone: 'None'
+  }
+  moreMenuEls = {
+    delete: {
+      disabled: true,
+    },
+    copy: {
+      disabled: true,
+    },
+    checkbox: {
+      value: 'Show checkboxes'
+    },
+  }
+  //? placeholder  --------------------------------------------------
+
+  toggleNoteVisibility(condition: boolean) {
+    if (condition) {
+      this.notePlaceholder.nativeElement.hidden = true; this.noteMain.nativeElement.hidden = false
+    } else {
+      this.notePlaceholder.nativeElement.hidden = false; this.noteMain.nativeElement.hidden = true
+    }
+  }
+
+  notePhClick() {
+    this.toggleNoteVisibility(true)
+    if (this.isCbox.value) this.cboxPh?.nativeElement.focus()
+    else this.noteBody?.nativeElement.focus()
+    if (!this.isEditing) {
+      this.mobileNewNoteStarterDismissed = false
+      this.inputLength.next({ title: 0, body: 0, cb: 0 })
+      document.addEventListener('mousedown', this.mouseDownEvent)
+    }
+    // Cached/note-derived catalogs can contain another note's selection flags.
+    // Start unselected; innerData applies only the opened note's own labels.
+    this.labels = this.Shared.label.list.map(label => ({ ...label, added: false }))
+    this.labelsDirty = false
+    if (!this.isEditing) this.preselectRouteLabel()
+    this.binderName = this.isEditing ? (this.noteToEdit.binder || '') : this.currentRouteBinder()
+    /*
+    the correct way is to use `mousedown` because : 
+    https://www.javascripttutorial.net/javascript-dom/javascript-mouse-events/
+    click & mouseup, wont get the job done.
+    when u try to select a text, and you loose the click btn outside `notesContainer`,
+    `closeNote()` will be called
+    https://prnt.sc/Wu_19wKRAYig
+    */
+  }
+
+  mouseDownEvent = async (event: Event) => {
+    if (this.isEditing) return
+    const el = this.main.nativeElement
+    const target = event.target as HTMLElement
+    
+    // Check for open tooltips or pickers
+    const isTooltipOpen = !!document.querySelector('[data-is-tooltip-open="true"]')
+    const isPickerClick = !!target.closest('.reminder-picker') || 
+                          !!target.closest('.tp-ui-modal') || 
+                          !!target.closest('.tp-ui-wrapper')
+    const isInsideNote = el.contains(target)
+    
+    // Special check for elements outside app-root (like TimepickerUI modals)
+    const appRoot = document.querySelector('app-root')
+    const isOutsideApp = appRoot && !appRoot.contains(target)
+
+    // If clicking inside the note, an open tooltip, our pickers, or outside the app (modals), DO NOT close.
+    if (isInsideNote || isTooltipOpen || isPickerClick || isOutsideApp) {
+      return
+    }
+
+    // Otherwise, save and close
+    const saved = await this.saveNote()
+    if (saved === false) return
+    this.closeNote()
+  }
+
+  closeNote() {
+    this.teardownDrawingResize()
+    this.toggleNoteVisibility(false)
+    this.mobileComposeMode = false
+    this.unlockBodyScroll()
+    document.removeEventListener('mousedown', this.mouseDownEvent)
+    this.reset()
+  }
+
+  openMobileComposer() {
+    if (this.isEditing) return
+    this.mobileComposeMode = true
+    this.lockBodyScroll()
+    this.notePhClick()
+  }
+
+  private async openWidgetComposer(request: WidgetCreateRequest) {
+    if (this.isEditing) return
+    try {
+      if (!this.noteMain.nativeElement.hidden) {
+        const saved = await this.saveNote()
+        if (saved === false) return
+        if (!this.noteMain.nativeElement.hidden) this.closeNote()
+      }
+
+      this.openMobileComposer()
+      this.mobileNewNoteStarterDismissed = true
+      if (request.type === 'checklist') this.startMobileChecklist()
+      else if (request.type === 'drawing') this.startMobileDrawing()
+      else requestAnimationFrame(() => this.noteBody?.nativeElement.focus())
+
+      this.cd.detectChanges()
+      await new Promise<void>(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      })
+      const openedInRequestedMode = this.mobileComposeMode
+        && !this.noteMain.nativeElement.hidden
+        && (request.type !== 'checklist' || this.isCbox.value)
+        && (request.type !== 'drawing' || this.isDrawingNote)
+        && (request.type !== 'plain' || (!this.isCbox.value && !this.isDrawingNote))
+      if (openedInRequestedMode) this.Shared.widgetComposerOpened.next(request)
+    } catch (error) {
+      console.warn('Could not open widget quick-create composer', error)
+    }
+  }
+
+  mobileBack() {
+    const hasTitle = this.noteTitle?.nativeElement.innerHTML.trim().length > 0
+    const hasBody = (this.noteBody?.nativeElement.innerHTML.trim().length ?? 0) > 0
+    const hasCboxes = this.checkBoxes.length > 0
+    const hasImages = this.images.length > 0
+    const hasAttachments = this.attachments.length > 0 || this.pendingAttachmentFiles.length > 0
+
+    if (hasTitle || hasBody || hasCboxes || hasImages || hasAttachments || this.isDrawingNote) {
+      this.saveNote()
+    } else {
+      // Empty note — just close without saving
+      if (this.isEditing) {
+        this.Shared.closeModal.next(true)
+      } else {
+        this.closeNote()
+      }
+    }
+  }
+
+  toggleCbox() {
+    const currentBodyHtml = this.noteBody?.nativeElement.innerHTML || ''
+    if (this.isCbox.value) {
+      if (this.checkBoxes.length) {
+        this.isHybridNote = false
+        this.isCbox.next(false)
+        this.cd.detectChanges()
+        this.restoreBodyHtmlAfterTemplateSwap(currentBodyHtml)
+        this.noteBody?.nativeElement.focus()
+        this.updateCheckboxMenuLabel()
+        return
+      }
+      this.isCbox.next(false)
+      return
+    }
+
+    if (this.hasMeaningfulBody(this.noteBody?.nativeElement.innerHTML)) {
+      this.isHybridNote = true
+    }
+    this.isCbox.next(true)
+    this.cd.detectChanges()
+    this.restoreBodyHtmlAfterTemplateSwap(currentBodyHtml)
+    requestAnimationFrame(() => this.cboxPh?.nativeElement.focus())
+  }
+
+  showMobileNewNoteStarters() {
+    const length = this.inputLength.value
+    return this.mobileComposeMode
+      && !this.isEditing
+      && !this.mobileNewNoteStarterDismissed
+      && !this.isCbox.value
+      && !this.isDrawingNote
+      && !(length.title || length.body || length.cb)
+      && !this.images.length
+      && !this.attachments.length
+      && !this.pendingAttachmentFiles.length
+  }
+
+  startMobileChecklist() {
+    this.mobileNewNoteStarterDismissed = true
+    this.toggleCbox()
+  }
+
+  startMobileDrawing(event?: Event) {
+    this.mobileNewNoteStarterDismissed = true
+    this.openDrawingNote(event)
+  }
+
+  private dismissMobileNewNoteStarters() {
+    if (this.mobileComposeMode && !this.isEditing) this.mobileNewNoteStarterDismissed = true
+  }
+
+  hasHybridBody(): boolean {
+    return this.isHybridNote;
+  }
+
+  canFormatText(): boolean {
+    return !this.isCbox.value || this.hasHybridBody()
+  }
+
+  private hasMeaningfulBody(value?: string | null) {
+    const div = createNoteHtmlContainer()
+    div.innerHTML = sanitizeNoteHtml(value || '')
+    return (div.textContent || div.innerText || '').replace(/\u00a0/g, ' ').trim().length > 0
+      || !!div.querySelector('img, .editor-link-preview-slot')
+  }
+
+  private updateCheckboxMenuLabel() {
+    if (this.isCbox.value) {
+      this.moreMenuEls.checkbox.value = this.isHybridNote ? 'Checklists shown' : 'Add text'
+    } else {
+      this.moreMenuEls.checkbox.value = 'Show checkboxes'
+    }
+  }
+
+  private restoreBodyHtmlAfterTemplateSwap(html: string) {
+    if (!this.noteBody || !html) return
+    const body = this.noteBody.nativeElement
+    if (!body.innerHTML) {
+      body.innerHTML = sanitizeNoteHtml(html)
+      this.hydrateEditorLinkPreviews()
+      this.hydrateInlineImageButtons()
+      this.updateInputLength({ body: body.innerHTML.length })
+    }
+  }
+
+  //? note  -----------------------------------------------------
+
+  get canSaveNote(): boolean {
+    return this.isEditing || !!this.currentNoteId() || this.isDrawingNote || !!(
+      this.noteTitle?.nativeElement.textContent?.trim()
+      || this.noteBody?.nativeElement.textContent?.trim()
+      || this.noteBody?.nativeElement.querySelector('img')
+      || this.cboxPh?.nativeElement.textContent?.trim()
+      || this.checkBoxes.length || this.images.length
+      || this.attachments.length || this.pendingAttachmentFiles.length
+    )
+  }
+
+  saveNote(closeAfterSave = true): Promise<boolean | void> {
+    const generation = this.editorGeneration
+    // Close, background events and typing can all request a save together.
+    // Serialize them so a new note is created once and later saves update it.
+    const save = this.saveQueue.then(() => {
+      if (this.destroyed || generation !== this.editorGeneration) return
+      return this.persistNote(closeAfterSave)
+    }).catch(error => {
+      if (!this.auth.isAuthExpiredError(error)) {
+        console.error('Could not save note', error)
+        this.showNoteSaveError()
+      }
+      return false
+    })
+    this.saveQueue = save
+    return save
+  }
+
+  private currentNoteId(): number | undefined {
+    if (this.isEditing) return this.noteToEdit.id
+    // Offline sync replaces temporary negative IDs with server IDs.
+    return (this.newNoteSyncId && this.notesService.notesList$.value?.find(note => note.syncId === this.newNoteSyncId)?.id)
+      || this.newNoteId
+  }
+
+  private async persistNote(closeAfterSave: boolean): Promise<boolean | void> {
+    if (closeAfterSave) this.cboxInput?.nativeElement.blur()
+    if (this.isDrawingNote) this.syncDrawingImage()
+    if (closeAfterSave && this.isCbox.value && this.cboxPh?.nativeElement.innerHTML.trim()) {
+      this.addCheckBoxFromPlaceholder()
+    }
+    const checkBoxesForSave = this.currentCheckBoxesForSave(closeAfterSave)
+    // Preserve any uncommitted checklist text without moving focus while autosaving.
+    const placeholderText = this.cboxPh?.nativeElement.innerHTML || ''
+    if (!closeAfterSave && this.isCbox.value && placeholderText.trim()) {
+      checkBoxesForSave.push({ id: Math.max(-1, ...checkBoxesForSave.map(cb => cb.id)) + 1, data: placeholderText, done: false, indentLevel: 0 })
+    }
+    const labelsForSave = await this.labelsForSave()
+    const markdown = this.currentMarkdownSource()
+    const noteObj: NoteI = {
+      noteTitle: this.noteTitle.nativeElement.innerHTML,
+      noteBody: markdownToHtml(markdown),
+      markdownSource: markdown,
+      contentFormat: 'markdown',
+      pinned: this.notePin.nativeElement.dataset['pinned'] === "true", // converting string to bool,
+      bgColor: this.noteMain.nativeElement.style.backgroundColor || '#ffffff',
+      bgImage: '',
+      checkBoxes: checkBoxesForSave,
+      images: this.images.map(image => ({ ...image, dataUrl: this.auth.canonicalImageUrl(image.dataUrl) })),
+      isCbox: this.isCbox.value,
+      labels: labelsForSave,
+      binder: this.binderName,
+      archived: this.isArchived,
+      trashed: this.isTrashed
+    }
+    const hasContent = !!(noteObj.noteTitle.length || noteObj.noteBody && noteObj.noteBody?.length || checkBoxesForSave.length || this.images.length || this.attachments.length || this.pendingAttachmentFiles.length || this.isDrawingNote)
+    const pendingCollaboratorIds = [...this.selectedCollaboratorIds]
+
+    let id = this.currentNoteId()
+    if (id) {
+      const noteChanged = this.noteChangedForSave(noteObj)
+      if (noteChanged) {
+        const baselineBeforeSave = this.saveBaselineSnapshot
+        await this.notesService.update(noteObj, id)
+        // A collaborator update received during this request is already the
+        // editor's baseline; completing an older save must not replace it.
+        if (this.saveBaselineSnapshot === baselineBeforeSave) {
+          this.saveBaselineSnapshot = this.noteSaveSnapshot(noteObj)
+        }
+        this.labelsDirty = false
+      }
+    } else if (hasContent && this.canSaveNote) {
+      this.newNoteSyncId ||= `note-${createUuid()}`
+      noteObj.syncId = this.newNoteSyncId
+      if (!this.mobileComposeMode && Capacitor.getPlatform() === 'web') {
+        // Set this before add() publishes the saved note to the overview.
+        this.Shared.composerDraftSyncId = this.newNoteSyncId
+      }
+      id = await this.Shared.note.db.add(noteObj)
+      if (!id || id === -1) {
+        this.showNoteSaveError()
+        return false
+      }
+      this.newNoteId = id
+      this.saveBaselineSnapshot = this.noteSaveSnapshot(noteObj)
+      this.labelsDirty = false
+    }
+
+    if (id) {
+      if (!this.isEditing) {
+        await this.applyPendingCollaborators(id, pendingCollaboratorIds)
+      }
+      await this.uploadPendingAttachments(id)
+      this.flushPendingReminderSaves(id, noteObj)
+      if (closeAfterSave) {
+        if (!this.isEditing && this.isArchived) {
+          this.Shared.snackBar({ action: 'archived', opposite: 'unarchived' }, { archived: false }, id)
+        }
+        if (!this.isEditing && this.isTrashed) {
+          this.Shared.snackBar({ action: 'trashed', opposite: 'untrashed' }, { trashed: false }, id)
+        }
+        if (this.isEditing) {
+          this.updateLastEditedTime()
+          this.Shared.closeModal.next(true)
+        } else this.closeNote()
+      }
+    }
+  }
+
+  private currentCheckBoxesForSave(updateModel: boolean) {
+    const next = this.normalizeCheckBoxes(this.checkBoxes)
+    const allCboxElements = this.noteContainer.nativeElement.querySelectorAll('[data-cbox-id]')
+    allCboxElements.forEach((el: Element) => {
+      const cboxEl = el as HTMLDivElement
+      const idAttr = cboxEl.getAttribute('data-cbox-id')
+      if (!idAttr) return
+      const id = Number(idAttr)
+      const cb = next.find(c => c.id === id)
+      if (cb) cb.data = cboxEl.innerHTML
+    })
+    if (updateModel) this.checkBoxes = next
+    return next
+  }
+
+  private noteChangedForSave(noteObj: NoteI) {
+    if (!this.currentNoteId()) return true
+    if (this.pendingAttachmentFiles.length) return true
+    const baseline = this.saveBaselineSnapshot ?? this.noteSaveSnapshot(this.noteToEdit)
+    return this.noteSaveSnapshot(noteObj) !== baseline
+  }
+
+  private flushPendingReminderSaves(noteId: number, noteObj: NoteI) {
+    if (!noteId || noteId === -1) return
+    const title = this.notePlainText(noteObj.noteTitle)
+    const body = this.notePlainText(noteObj.noteBody)
+
+    // Reminder saves are fire-and-forget and only run after the note itself
+    // has been persisted, so native clients see a real noteId in the request.
+    if (this.pendingReminderDate) {
+      const reminderDate = this.pendingReminderDate
+      const repeatRule = this.pendingReminderRepeatRule
+      this.pendingReminderDate = null
+      this.pendingReminderRepeatRule = null
+      this.reminderService.create({
+        noteId,
+        dueAtUtc: reminderDate.toISOString(),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        repeatRule,
+        title,
+        body
+      }).then(result => {
+        if (!result) this.showReminderSaveError()
+      }).catch(() => this.showReminderSaveError())
+    }
+
+    if (this.pendingReminderLocation) {
+      const location = this.pendingReminderLocation
+      this.pendingReminderLocation = null
+      this.reminderService.create({
+        noteId,
+        locationName: location.locationName,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        radiusMeters: location.radiusMeters,
+        locationTrigger: location.locationTrigger,
+        timezone: location.timezone,
+        title,
+        body
+      }).then(result => {
+        if (!result) this.showReminderSaveError()
+      }).catch(() => this.showReminderSaveError())
+    }
+  }
+
+  private noteSaveSnapshot(note: NoteI) {
+    return JSON.stringify({
+      noteTitle: note.noteTitle || '',
+      noteBody: this.auth.canonicalImageHtml(note.noteBody || ''),
+      markdownSource: note.markdownSource || '',
+      contentFormat: note.contentFormat || 'html',
+      pinned: !!note.pinned,
+      bgColor: note.bgColor || '',
+      bgImage: note.bgImage || '',
+      checkBoxes: this.normalizeCheckBoxes(note.checkBoxes || []),
+      images: this.normalizeImages(note.images || []),
+      isCbox: !!note.isCbox,
+      labels: this.normalizeLabels(note.labels || []),
+      binder: note.binder || '',
+      archived: !!note.archived,
+      trashed: !!note.trashed
+    })
+  }
+
+  private normalizeImages(images: any[] = []) {
+    return images.map(image => ({
+      id: image.id,
+      dataUrl: this.auth.canonicalImageUrl(image.dataUrl || ''),
+      name: image.name || '',
+      placement: image.placement || 'bottom'
+    }))
+  }
+
+  private normalizeLabels(labels: any[] = []) {
+    return labels
+      .filter(label => label.added === true)
+      .map(label => ({ id: label.id, name: label.name, added: true }))
+  }
+
+  private async labelsForSave() {
+    const selectedLabels = this.labels.filter(label => label.added)
+    if (!this.isEditing || !this.noteToEdit?.id || this.labelsDirty || !this.isSharedEditingNote()) return selectedLabels
+
+    try {
+      const fresh = await this.notesService.get(this.noteToEdit.id, { merge: false })
+      return this.normalizeLabels(fresh?.labels || [])
+    } catch {
+      return this.normalizeLabels(this.noteToEdit.labels || selectedLabels)
+    }
+  }
+
+  private normalizeCheckBoxes(checkBoxes: CheckboxI[] = []) {
+    const numericIds = checkBoxes
+      .map(item => Number((item as any)?.id))
+      .filter(id => Number.isSafeInteger(id) && id >= 0)
+    let nextId = numericIds.length ? Math.max(...numericIds) + 1 : 0
+    const usedIds = new Set<number>()
+    const nextAvailableId = () => {
+      while (usedIds.has(nextId)) nextId++
+      return nextId++
+    }
+
+    return checkBoxes.map(item => ({
+      id: (() => {
+        const numericId = Number((item as any)?.id)
+        if (Number.isSafeInteger(numericId) && numericId >= 0 && !usedIds.has(numericId)) {
+          usedIds.add(numericId)
+          return numericId
+        }
+        const id = nextAvailableId()
+        usedIds.add(id)
+        return id
+      })(),
+      done: !!item.done,
+      data: item.data || '',
+      indentLevel: this.normalizedCboxIndentLevel(item.indentLevel)
+    }))
+  }
+
+  checkboxIndentLevel(cb?: CheckboxI) {
+    return this.normalizedCboxIndentLevel(cb?.indentLevel)
+  }
+
+  checkboxIndentPx(cb?: CheckboxI) {
+    return this.checkboxIndentLevel(cb) * 32
+  }
+
+  checklistRowsForSection(isDone: boolean) {
+    const rows = this.preferences.value.moveCompletedChecklistItemsToBottom
+      ? this.checkBoxes.filter(cb => cb.done === isDone)
+      : (isDone ? [] : this.checkBoxes)
+    return normalizeIndentLevels(rows)
+  }
+
+  completedChecklistCount() {
+    return this.checkBoxes.filter(cb => cb.done).length
+  }
+
+  toggleCompletedChecklistCollapse() {
+    this.isCboxCompletedListCollapsed = !this.isCboxCompletedListCollapsed
+    this.saveCompletedChecklistCollapseState()
+    if (this.isEditing && this.noteToEdit.id) {
+      this.noteToEdit.completedChecklistCollapsed = this.isCboxCompletedListCollapsed
+      this.notesService.updateViewState(this.noteToEdit.id, {
+        completedChecklistCollapsed: this.isCboxCompletedListCollapsed
+      }).catch(console.error)
+    }
+  }
+
+  private completedChecklistCollapseStorageKey(note: NoteI = this.noteToEdit) {
+    const userId = this.auth.isLocal ? this.auth.workspace.local!.id : this.auth.currentUser?.id || 'anon'
+    const server = environment.apiUrl || location.origin
+    const noteKey = note?.syncId || note?.id
+    return noteKey ? `kept_completed_checklist_collapsed:${server}:${userId}:${noteKey}` : ''
+  }
+
+  private loadCompletedChecklistCollapseState(note: NoteI) {
+    if (typeof note.completedChecklistCollapsed === 'boolean') {
+      this.isCboxCompletedListCollapsed = note.completedChecklistCollapsed
+      this.saveCompletedChecklistCollapseState()
+      return
+    }
+    const key = this.completedChecklistCollapseStorageKey(note)
+    if (!key) {
+      this.isCboxCompletedListCollapsed = false
+      return
+    }
+    try {
+      const saved = localStorage.getItem(key)
+      this.isCboxCompletedListCollapsed = saved === null ? false : saved === '1'
+    } catch {
+      this.isCboxCompletedListCollapsed = false
+    }
+  }
+
+  private saveCompletedChecklistCollapseState() {
+    const key = this.completedChecklistCollapseStorageKey()
+    if (!key) return
+    try {
+      localStorage.setItem(key, this.isCboxCompletedListCollapsed ? '1' : '0')
+    } catch {}
+  }
+
+  private cboxSectionMatches(cb: CheckboxI, isDone: boolean) {
+    return !this.preferences.value.moveCompletedChecklistItemsToBottom || cb.done === isDone
+  }
+
+  private normalizedCboxIndentLevel(value: unknown) {
+    return normalizeIndentLevel(value)
+  }
+
+  private adjustCboxIndentLevel(id: number, step: number, options: { commit?: boolean } = {}) {
+    this.syncCboxDomIntoModel()
+    const cb = this.checkBoxes.find(item => item.id === id)
+    if (!cb) return false
+    return this.setCboxIndentLevel(id, this.checkboxIndentLevel(cb) + step, options)
+  }
+
+  private setCboxIndentLevel(id: number, indentLevel: number, options: { commit?: boolean } = {}) {
+    this.syncCboxDomIntoModel()
+    const index = this.checkBoxes.findIndex(cb => cb.id === id)
+    if (index < 0) return false
+
+    const currentIndent = this.checkboxIndentLevel(this.checkBoxes[index])
+    const nextIndent = Math.min(normalizeIndentLevel(indentLevel), maxIndentLevelAt(this.checkBoxes, index))
+    if (currentIndent === nextIndent) return false
+
+    // Nested rows keep their relative depth when their parent moves.
+    const delta = nextIndent - currentIndent
+    for (const childIndex of descendantIndexes(this.checkBoxes, index)) {
+      this.checkBoxes[childIndex] = {
+        ...this.checkBoxes[childIndex],
+        indentLevel: normalizeIndentLevel(this.checkboxIndentLevel(this.checkBoxes[childIndex]) + delta)
+      }
+    }
+    this.checkBoxes[index] = { ...this.checkBoxes[index], indentLevel: nextIndent }
+    this.checkBoxes = [...this.checkBoxes]
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.cd.detectChanges()
+
+    if (options.commit !== false) {
+      this.pushCboxHistorySnapshot()
+      this.queueAutosave()
+    }
+    return true
+  }
+
+  private childIndexesForParent(index: number) {
+    return descendantIndexes(this.checkBoxes, index)
+  }
+
+  private toggleCboxDoneWithChildren(id: number) {
+    this.syncCboxDomIntoModel()
+    const index = this.checkBoxes.findIndex(x => x.id === id)
+    if (index < 0) return false
+
+    const done = !this.checkBoxes[index].done
+    this.checkBoxes[index].done = done
+    for (const childIndex of this.childIndexesForParent(index)) {
+      this.checkBoxes[childIndex].done = done
+    }
+    this.checkBoxes = [...this.checkBoxes]
+    return true
+  }
+
+  private applyCboxIndentFromDrag(rawDx: number, rawDy: number) {
+    if (this.draggedCboxId === undefined) return false
+    const absDx = Math.abs(rawDx)
+    const absDy = Math.abs(rawDy)
+    const indentWidth = 32
+    const activationDistance = 24
+
+    if (!this.cboxTouchIndentHandled) {
+      if (absDx < activationDistance || absDx < absDy * 1.15) return false
+      this.cboxTouchIndentHandled = true
+    }
+
+    const levelDelta = absDx < activationDistance
+      ? 0
+      : Math.min(Math.round(absDx / indentWidth), MAX_INDENT_LEVEL)
+    const targetIndent = this.cboxTouchStartIndent + (rawDx < 0 ? -levelDelta : levelDelta)
+    const changed = this.setCboxIndentLevel(this.draggedCboxId, targetIndent, { commit: false })
+    if (changed) {
+      this.cboxDragOrderChanged = true
+      try { (navigator as any).vibrate?.(8) } catch {}
+    }
+    return true
+  }
+
+  private cloneCheckBoxes(checkBoxes: CheckboxI[] = []) {
+    return this.normalizeCheckBoxes(checkBoxes)
+  }
+
+  private resetCboxHistory() {
+    this.cboxHistory = [this.cloneCheckBoxes(this.checkBoxes)]
+    this.cboxHistoryIndex = 0
+    this.lastCboxStructuralChangeAt = 0
+    this.lastCboxTextInputAt = 0
+    this.cboxHistoryRedoMode = false
+  }
+
+  private syncCboxDomIntoModel() {
+    this.checkBoxes = this.currentCheckBoxesForSave(false)
+  }
+
+  private pushCboxHistorySnapshot() {
+    const snapshot = this.cloneCheckBoxes(this.currentCheckBoxesForSave(false))
+    const previous = this.cboxHistory[this.cboxHistoryIndex]
+    if (previous && JSON.stringify(previous) === JSON.stringify(snapshot)) return
+    this.cboxHistory = this.cboxHistory.slice(0, this.cboxHistoryIndex + 1)
+    this.cboxHistory.push(snapshot)
+    if (this.cboxHistory.length > 80) this.cboxHistory.shift()
+    this.cboxHistoryIndex = this.cboxHistory.length - 1
+    this.lastCboxStructuralChangeAt = Date.now()
+    this.cboxHistoryRedoMode = true
+  }
+
+  private canStepCboxHistory(command: 'undo' | 'redo') {
+    return command === 'undo'
+      ? this.cboxHistoryIndex > 0
+      : this.cboxHistoryIndex >= 0 && this.cboxHistoryIndex < this.cboxHistory.length - 1
+  }
+
+  private shouldUseCboxHistory(command: 'undo' | 'redo') {
+    if (!this.isCbox.value) return false
+    if (!this.canStepCboxHistory(command)) return false
+    if (command === 'redo') return this.cboxHistoryRedoMode
+    return this.lastCboxStructuralChangeAt >= this.lastCboxTextInputAt
+  }
+
+  private stepCboxHistory(command: 'undo' | 'redo') {
+    if (!this.canStepCboxHistory(command)) return
+    this.cboxHistoryIndex += command === 'undo' ? -1 : 1
+    this.checkBoxes = this.cloneCheckBoxes(this.cboxHistory[this.cboxHistoryIndex])
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.inputLength.next({ ...this.inputLength.value, cb: this.checkBoxes.length })
+    this.cboxHistoryRedoMode = this.canStepCboxHistory('redo')
+    this.cd.detectChanges()
+    this.queueAutosave()
+  }
+
+  hasCheckedCboxItems() {
+    return this.isCbox.value && this.checkBoxes.some(cb => cb.done)
+  }
+
+  uncheckAllCboxItems(tooltipEl?: HTMLDivElement) {
+    this.syncCboxDomIntoModel()
+    if (!this.checkBoxes.some(cb => cb.done)) {
+      if (tooltipEl) this.Shared.closeTooltip(tooltipEl)
+      return
+    }
+    this.checkBoxes = this.checkBoxes.map(cb => cb.done ? { ...cb, done: false } : cb)
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.pushCboxHistorySnapshot()
+    this.cd.detectChanges()
+    this.queueAutosave()
+    if (tooltipEl) this.Shared.closeTooltip(tooltipEl)
+  }
+
+  deleteAllCompletedCboxItems(tooltipEl?: HTMLDivElement) {
+    this.syncCboxDomIntoModel()
+    const completedCount = this.checkBoxes.filter(cb => cb.done).length
+    if (tooltipEl) this.Shared.closeTooltip(tooltipEl)
+    if (!completedCount) return
+
+    const itemLabel = completedCount === 1 ? 'item' : 'items'
+    if (!confirm(`Delete ${completedCount} completed ${itemLabel}?`)) return
+
+    this.checkBoxes = normalizeIndentLevels(this.checkBoxes.filter(cb => !cb.done))
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.inputLength.next({ ...this.inputLength.value, cb: this.checkBoxes.length })
+    this.pushCboxHistorySnapshot()
+    this.cd.detectChanges()
+    this.queueAutosave()
+  }
+
+  private notePlainText(value?: string | null) {
+    const div = createNoteHtmlContainer()
+    div.innerHTML = sanitizeNoteHtml(value || '')
+    return (div.textContent || div.innerText || '').replace(/\s+/g, ' ').trim()
+  }
+
+  reset() {
+    this.editorGeneration++
+    this.clearComposerDraft()
+    this.newNoteId = undefined
+    this.newNoteSyncId = undefined
+    this.saveBaselineSnapshot = undefined
+    this.lastExternalUpdateSnapshot = undefined
+    this.noteTitle.nativeElement.innerHTML = ''
+    if (this.noteBody) this.noteBody.nativeElement.innerHTML = ''
+    this.notePin.nativeElement.dataset['pinned'] = 'false'
+    this.noteContainer.nativeElement.style.backgroundImage = ''
+    this.noteMain.nativeElement.style.backgroundImage = ''
+    this.noteMain.nativeElement.style.backgroundColor = '#ffffff'
+    this.noteMain.nativeElement.style.borderColor = ''
+    this.noteMain.nativeElement.style.color = ''
+    this.hasBackgroundImage = false
+    this.updateTextColor('#ffffff')
+    //
+    this.checkBoxes = []
+    this.pendingCboxFocusRange = undefined
+    this.cboxSuggestionEligibleIds.clear()
+    this.cboxSuggestionDraftValues.clear()
+    this.dismissedCboxSuggestionIds.clear()
+    this.activeCboxSuggestionRowId = undefined
+    this.resetCboxHistory()
+    this.images = []
+    this.attachments = []
+    this.pendingAttachmentFiles = []
+    this.isUploadingAttachment = false
+    this.isDrawingNote = false
+    this.mobileNewNoteStarterDismissed = false
+    this.isDrawingFullscreen = false
+    this.isHybridNote = false
+    this.showTextFormatting = false
+    this.showDrawingBackgroundMenu = false
+    this.showDrawingMoreMenu = false
+    this.showDrawingEraserMenu = false
+    this.drawingOpenToolMenu = undefined
+    this.clearDrawingSelection()
+    this.drawingHistory = []
+    this.drawingHistoryIndex = -1
+    this.isCbox.next(false)
+    this.isArchived = false
+    this.isTrashed = false
+    this.isCboxCompletedListCollapsed = false
+    this.isPanning = false
+    this.drawingTransform = { scale: 1, x: 0, y: 0 }
+    this.activePointers.clear()
+    this.inputLength.next({ title: 0, body: 0, cb: 0 })
+    this.collaboratorUsers = []
+    this.selectedCollaboratorIds = []
+    this.collaboratorError = ''
+    this.isSavingCollaborators = false
+  }
+
+
+  private clearComposerDraft() {
+    if (this.newNoteSyncId && this.Shared.composerDraftSyncId === this.newNoteSyncId) {
+      this.Shared.composerDraftSyncId = undefined
+    }
+  }
+
+  async pasteEvent(event: ClipboardEvent) {
+    const imageFiles = this.clipboardImageFiles(event)
+    if (imageFiles.length) {
+      event.preventDefault()
+      if (this.noteMain.nativeElement.hidden) this.notePhClick()
+      this.rememberBodySelection()
+      await this.addImageFiles(imageFiles)
+      return
+    }
+
+    // to remove text styling -> before : https://prnt.sc/a7M5g-kbofba, after : https://prnt.sc/D7KEV6rdlm_7
+    event.preventDefault()
+    let text = event.clipboardData?.getData('text/plain');
+    let target = event.currentTarget as HTMLDivElement
+    this.insertPlainTextAtCursor(target, text || '')
+    if (text) this.dismissMobileNewNoteStarters()
+    if (this.noteBody?.nativeElement === target) {
+      this.queueEditorLinkDecoration()
+    } else if (this.noteTitle?.nativeElement === target) {
+      this.onNoteTitleInput()
+    }
+    // document.execCommand('insertText', false, text)
+    // ! TODO, when u paste, yji fel <br> => so ywali maybanch
+  }
+
+  private insertPlainTextAtCursor(target: HTMLElement, text: string) {
+    target.focus()
+    const selection = window.getSelection()
+    let range: Range
+    if (selection?.rangeCount && target.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      range = selection.getRangeAt(0)
+      const common = range.commonAncestorContainer
+      const commonEl = common.nodeType === Node.ELEMENT_NODE ? common as Element : common.parentElement
+      const previewSlot = commonEl?.closest('.editor-link-preview-slot')
+      if (previewSlot) {
+        range = document.createRange()
+        range.setStartAfter(previewSlot)
+        range.collapse(true)
+      } else {
+        range.deleteContents()
+      }
+    } else {
+      range = document.createRange()
+      range.selectNodeContents(target)
+      range.collapse(false)
+    }
+
+    const fragment = document.createDocumentFragment()
+    const lines = text.replace(/\r\n?/g, '\n').split('\n')
+    let lastNode: Node | null = null
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        lastNode = document.createElement('br')
+        fragment.append(lastNode)
+      }
+      if (line) {
+        lastNode = document.createTextNode(line)
+        fragment.append(lastNode)
+      }
+    })
+    range.insertNode(fragment)
+    if (!lastNode) return
+    range = document.createRange()
+    range.setStartAfter(lastNode)
+    range.collapse(true)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  }
+
+  private clipboardImageFiles(event: ClipboardEvent): File[] {
+    const items = Array.from(event.clipboardData?.items || [])
+    const files = items
+      .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+      .map(item => item.getAsFile())
+      .filter((file): file is File => !!file)
+    if (files.length) return files
+    return Array.from(event.clipboardData?.files || []).filter(file => isNoteImageFile(file))
+  }
+
+  @HostListener('document:selectionchange')
+  onDocumentSelectionChange() {
+    this.rememberBodySelection()
+  }
+
+  rememberBodySelection() {
+    const body = this.noteBody?.nativeElement
+    const selection = window.getSelection()
+    if (!body || !selection?.rangeCount) return
+    const range = selection.getRangeAt(0)
+    if (body.contains(range.commonAncestorContainer)) {
+      this.lastBodyRange = range.cloneRange()
+    }
+  }
+
+  openImagePicker(event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    if (this.noteMain.nativeElement.hidden) this.notePhClick()
+    this.rememberBodySelection()
+    this.imageInput.nativeElement.click()
+  }
+
+  async imageInputChange(event: Event) {
+    const input = event.target as HTMLInputElement
+    await this.addImageFiles(input.files)
+    input.value = ''
+  }
+
+  async dropImages(event: DragEvent) {
+    if (this.draggedInlineObject) {
+      event.preventDefault()
+      event.stopPropagation()
+      this.moveInlineObjectToDrop(event)
+      return
+    }
+    if (!event.dataTransfer?.files?.length) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (this.noteMain.nativeElement.hidden) this.notePhClick()
+    await this.addImageFiles(event.dataTransfer.files, event)
+  }
+
+  dragOverImages(event: DragEvent) {
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = this.draggedInlineObject ? 'move' : 'copy'
+  }
+
+  dragInlineImage(event: DragEvent) {
+    const target = event.target as HTMLElement
+    const inlineObject = target.closest('.inline-note-image-wrap, .editor-link-preview-slot') as HTMLElement | null
+    if (!inlineObject) return
+    this.draggedInlineImage = inlineObject.classList.contains('inline-note-image-wrap') ? inlineObject : undefined
+    this.draggedInlineObject = inlineObject
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', inlineObject.classList.contains('editor-link-preview-slot') ? 'move-note-link-preview' : 'move-note-image')
+    }
+  }
+
+  dragEndInlineImage() {
+    this.draggedInlineImage = undefined
+    this.draggedInlineObject = undefined
+  }
+
+  async addImageFiles(fileList: FileList | File[] | null, event?: DragEvent) {
+    if (!fileList?.length) return
+    const files = Array.from(fileList).filter(file => isNoteImageFile(file))
+    if (!files.length) return
+    if (this.isCbox.value) {
+      this.isCbox.next(false)
+      this.cd.detectChanges()
+    }
+    if (event) this.placeCaretFromDrop(event)
+    const imageData = await Promise.all(files.map(file => this.fileToImage(file, 'bottom')))
+    imageData.forEach(image => this.insertInlineImage(image))
+    this.updateInputLength({ body: this.noteBody?.nativeElement.innerHTML.length || 0 })
+    if (this.isEditing) await this.saveNote(false)
+    this.queueAutosave()
+  }
+
+  fileToImage(file: File, placement: NoteImageI['placement']): Promise<NoteImageI> {
+    return this.Shared.note.db.uploadImage(file).then(uploaded => ({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      dataUrl: this.auth.authenticatedImageUrl(uploaded.url),
+      name: uploaded.name || file.name,
+      placement
+    }))
+  }
+
+  openAttachmentPicker(event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    if (this.noteMain.nativeElement.hidden) this.notePhClick()
+    this.attachmentInput.nativeElement.click()
+  }
+
+  async attachmentInputChange(event: Event) {
+    const input = event.target as HTMLInputElement
+    await this.addAttachmentFiles(input.files)
+    input.value = ''
+  }
+
+  async addAttachmentFiles(fileList: FileList | null) {
+    if (!fileList?.length) return
+    const files = Array.from(fileList).filter(file => this.isAllowedAttachment(file))
+    if (!files.length) {
+      this.showAttachmentMessage('That file type is not supported.')
+      return
+    }
+    const oversized = files.find(file => file.size > MAX_FILE_BYTES)
+    if (oversized) {
+      this.showAttachmentMessage('Attachments must be 100 MiB or smaller.')
+      return
+    }
+
+    if (!this.isEditing || !this.noteToEdit.id) {
+      const existingKeys = new Set(this.pendingAttachmentFiles.map(file => `${file.name}:${file.size}:${file.lastModified}`))
+      this.pendingAttachmentFiles = [
+        ...this.pendingAttachmentFiles,
+        ...files.filter(file => !existingKeys.has(`${file.name}:${file.size}:${file.lastModified}`))
+      ]
+      this.queueAutosave()
+      return
+    }
+
+    this.isUploadingAttachment = true
+    try {
+      for (const file of files) {
+        const attachment = await this.Shared.note.db.uploadAttachment(this.noteToEdit.id, file)
+        this.attachments = [attachment, ...this.attachments]
+      }
+      await this.notesService.load()
+    } catch (error: any) {
+      this.showAttachmentMessage(error?.error?.error || 'Could not attach that file.')
+    } finally {
+      this.isUploadingAttachment = false
+    }
+  }
+
+  private async uploadPendingAttachments(noteId: number) {
+    if (!this.pendingAttachmentFiles.length || !noteId || noteId === -1) return
+    this.isUploadingAttachment = true
+    try {
+      for (const file of this.pendingAttachmentFiles) {
+        const attachment = await this.Shared.note.db.uploadAttachment(noteId, file)
+        this.attachments = [attachment, ...this.attachments]
+        this.pendingAttachmentFiles = this.pendingAttachmentFiles.filter(item => item !== file)
+      }
+      await this.notesService.load()
+    } catch (error: any) {
+      this.showAttachmentMessage(error?.error?.error || 'The note was saved, but an attachment could not be uploaded.')
+    } finally {
+      this.isUploadingAttachment = false
+    }
+  }
+
+  removePendingAttachment(file: File, event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    this.pendingAttachmentFiles = this.pendingAttachmentFiles.filter(item => item !== file)
+  }
+
+  async deleteAttachment(attachment: NoteAttachmentI, event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    const noteId = this.currentNoteId()
+    if (!noteId) return
+    try {
+      await this.Shared.note.db.deleteAttachment(noteId, attachment.id)
+      this.attachments = this.attachments.filter(item => item.id !== attachment.id)
+      await this.notesService.load()
+    } catch (error: any) {
+      this.showAttachmentMessage(error?.error?.error || 'Could not delete attachment.')
+    }
+  }
+
+  async downloadAttachment(attachment: NoteAttachmentI, event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    try {
+      await this.notesService.downloadAttachment(attachment)
+    } catch (error: any) {
+      this.showAttachmentMessage(error?.error?.error || 'Could not download attachment.')
+    }
+  }
+
+  async downloadImage(src: string, filename: string | undefined, event: Event) {
+    if (!this.notesService.canUseNativeDownloads()) return
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await this.notesService.downloadImage(src, filename)
+    } catch (error: any) {
+      this.showAttachmentMessage(error?.error?.error || 'Could not download image.')
+    }
+  }
+
+  async downloadInlineImage(event: Event) {
+    const target = event.target
+    if (!(target instanceof HTMLImageElement) || !this.notesService.canUseNativeDownloads()) return
+    await this.downloadImage(target.getAttribute('src') || target.src, target.getAttribute('alt') || 'kept-image', event)
+  }
+
+  attachmentIcon(attachment: Pick<NoteAttachmentI, 'mimeType' | 'originalName'> | File) {
+    const name = 'name' in attachment ? attachment.name : attachment.originalName
+    const mime = 'type' in attachment ? attachment.type : attachment.mimeType
+    const ext = name.split('.').pop()?.toLowerCase() || ''
+    if (mime.startsWith('image/')) return 'image'
+    if (mime.includes('pdf')) return 'picture_as_pdf'
+    if (['txt', 'md', 'csv', 'json', 'xml'].includes(ext)) return 'description'
+    if (['zip', 'rar', '7z', 'gz', 'tar'].includes(ext)) return 'folder_zip'
+    if (['xls', 'xlsx', 'ods'].includes(ext)) return 'table_chart'
+    if (['ppt', 'pptx', 'odp'].includes(ext)) return 'slideshow'
+    return 'draft'
+  }
+
+  formatFileSize(size: number) {
+    if (size < 1024) return `${size} B`
+    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`
+    return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`
+  }
+
+  private isAllowedAttachment(file: File) {
+    const ext = `.${file.name.split('.').pop()?.toLowerCase() || ''}`
+    return this.attachmentAccept.split(',').includes(ext)
+  }
+
+  private showAttachmentMessage(message: string) {
+    try {
+      Snackbar.show({ pos: 'bottom-left', text: message, duration: 3600 })
+    } catch {}
+  }
+
+  moveImage(image: NoteImageI) {
+    image.placement = image.placement === 'top' ? 'bottom' : 'top'
+    this.queueAutosave()
+  }
+
+  removeImage(imageId: string) {
+    this.images = this.images.filter(image => image.id !== imageId)
+    this.inputLength.next({ ...this.inputLength.value, body: (this.noteBody?.nativeElement.innerHTML.length || 0) + this.images.length })
+    this.queueAutosave()
+  }
+
+  private insertInlineImage(image: NoteImageI) {
+    const body = this.noteBody?.nativeElement
+    if (!body) return
+    body.focus()
+
+    const wrapper = this.buildInlineImageWrapper(image.dataUrl, image.name)
+
+    const range = this.currentBodyRange(body)
+    range.deleteContents()
+    range.insertNode(wrapper)
+    const spacer = document.createElement('div')
+    spacer.innerHTML = '<br>'
+    wrapper.after(spacer)
+    range.setStartAfter(spacer)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    this.lastBodyRange = range.cloneRange()
+    this.onNoteBodyInput(body)
+  }
+
+  private buildInlineImageWrapper(src: string, alt: string) {
+    const wrapper = document.createElement('div')
+    wrapper.className = 'inline-note-image-wrap'
+    wrapper.contentEditable = 'false'
+
+    const img = document.createElement('img')
+    img.className = 'inline-note-image'
+    img.src = this.auth.authenticatedImageUrl(src)
+    img.alt = alt || ''
+    wrapper.appendChild(img)
+
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = 'inline-image-delete-btn H'
+    del.setAttribute('aria-label', 'Delete image')
+    del.dataset['inlineImageTool'] = 'delete'
+    del.innerHTML = '<span class="material-symbols-outlined">close</span>'
+    wrapper.appendChild(del)
+
+    return wrapper
+  }
+
+  // Adds delete buttons to inline images that came in via saved noteBody HTML
+  // (which doesn't include the button markup since it's stripped on save).
+  private hydrateInlineImageButtons() {
+    const body = this.noteBody?.nativeElement
+    if (!body) return
+    body.querySelectorAll<HTMLElement>('.inline-note-image-wrap').forEach(wrap => {
+      if (wrap.querySelector('.inline-image-delete-btn')) return
+      wrap.contentEditable = 'false'
+      const del = document.createElement('button')
+      del.type = 'button'
+      del.className = 'inline-image-delete-btn H'
+      del.setAttribute('aria-label', 'Delete image')
+      del.dataset['inlineImageTool'] = 'delete'
+      del.innerHTML = '<span class="material-symbols-outlined">close</span>'
+      wrap.appendChild(del)
+    })
+  }
+
+  onNoteBodyClick(event: Event) {
+    const target = event.target as HTMLElement
+    const deleteBtn = target.closest('[data-inline-image-tool="delete"]') as HTMLElement | null
+    if (!deleteBtn) return
+    event.preventDefault()
+    event.stopPropagation()
+    const wrap = deleteBtn.closest('.inline-note-image-wrap') as HTMLElement | null
+    if (!wrap) return
+    // Also remove the trailing <br> spacer that was inserted alongside the wrapper.
+    const next = wrap.nextElementSibling
+    wrap.remove()
+    if (next && next.tagName === 'DIV' && next.innerHTML.trim().toLowerCase() === '<br>') next.remove()
+    const body = this.noteBody?.nativeElement
+    if (body) this.onNoteBodyInput(body)
+    this.queueAutosave()
+  }
+
+  private moveInlineObjectToDrop(event: DragEvent) {
+    const body = this.noteBody?.nativeElement
+    const inlineObject = this.draggedInlineObject
+    if (!body || !inlineObject) return
+
+    this.placeCaretFromDrop(event)
+    const range = this.currentBodyRange(body)
+    if (inlineObject.contains(range.commonAncestorContainer)) {
+      this.dragEndInlineImage()
+      return
+    }
+
+    range.deleteContents()
+    range.insertNode(inlineObject)
+    const spacer = document.createElement('div')
+    spacer.innerHTML = '<br>'
+    inlineObject.after(spacer)
+    range.setStartAfter(spacer)
+    range.collapse(true)
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    this.onNoteBodyInput(body)
+    this.dragEndInlineImage()
+  }
+
+  private currentBodyRange(body: HTMLDivElement) {
+    const selection = window.getSelection()
+    if (selection?.rangeCount) {
+      const range = selection.getRangeAt(0)
+      if (body.contains(range.commonAncestorContainer)) return range
+    }
+    if (this.lastBodyRange && body.contains(this.lastBodyRange.commonAncestorContainer)) {
+      return this.lastBodyRange.cloneRange()
+    }
+    const range = document.createRange()
+    range.selectNodeContents(body)
+    range.collapse(false)
+    return range
+  }
+
+  private placeCaretFromDrop(event: DragEvent) {
+    const body = this.noteBody?.nativeElement
+    if (!body) return
+    const documentWithCaret = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node, offset: number } | null
+    }
+    const range = documentWithCaret.caretRangeFromPoint?.(event.clientX, event.clientY)
+    const position = documentWithCaret.caretPositionFromPoint?.(event.clientX, event.clientY)
+      const nextRange = range || document.createRange()
+    if (!range && position) nextRange.setStart(position.offsetNode, position.offset)
+    const inlineObject = this.draggedInlineObject
+    if (inlineObject && inlineObject.contains(nextRange.commonAncestorContainer)) return
+    if (body.contains(nextRange.commonAncestorContainer)) {
+      nextRange.collapse(true)
+      this.lastBodyRange = nextRange.cloneRange()
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(nextRange)
+    }
+  }
+
+
+  //? checkboxes  --------------------------------------------------
+
+  cboxPhKeyDown($event: KeyboardEvent) {
+    const isLetter = /^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"²^\\|,.<>\/?éèçµ]$/i.test($event.key)
+    // ex : if he clicked the f1 btn for example, nothing would happen, otherwise : 
+    if (!isLetter) return
+    $event.preventDefault()
+    let enteredValue = $event.key
+    this.addCheckBox(enteredValue) // a new checkbox will appear in the html
+    this.cd.detectChanges()
+    this.focusLastCboxInput()
+  }
+
+  cboxPhInput() {
+    const value = this.cboxPh?.nativeElement.innerHTML || ''
+    if (!value.trim()) return
+    this.cboxPh?.nativeElement.replaceChildren()
+    this.addCheckBox(value)
+    this.cd.detectChanges()
+    this.focusLastCboxInput()
+  }
+
+  cboxPhClick() {
+    requestAnimationFrame(() => this.cboxPh?.nativeElement.focus())
+  }
+
+  private focusLastCboxInput() {
+    const el = document.querySelector(`[data-cbox-last="true"]`) as HTMLDivElement | null
+    if (!el) return
+    el.focus()
+    const sel = window.getSelection()
+    sel?.selectAllChildren(el)
+    sel?.collapseToEnd()
+  }
+
+  addCheckBox(data: string, insertAfterId?: number, options: { done?: boolean } = {}) {
+    this.syncCboxDomIntoModel()
+    const numericIds = this.checkBoxes
+      .map(c => Number(c.id))
+      .filter(id => Number.isSafeInteger(id) && id >= 0)
+    const maxId = numericIds.length ? Math.max(...numericIds) : -1
+    const cb = {
+      done: options.done ?? false,
+      data: data,
+      id: maxId + 1,
+      indentLevel: 0
+    }
+    if (insertAfterId !== undefined) {
+      const idx = this.checkBoxes.findIndex(item => item.id === insertAfterId)
+      if (idx >= 0) {
+        cb.indentLevel = this.checkboxIndentLevel(this.checkBoxes[idx])
+        this.checkBoxes.splice(idx + 1, 0, cb)
+      } else {
+        this.checkBoxes.push(cb)
+      }
+    } else {
+      this.checkBoxes.push(cb)
+    }
+    this.cboxSuggestionEligibleIds.add(cb.id)
+    this.inputLength.next({ ...this.inputLength.value, cb: this.checkBoxes.length })
+    this.pushCboxHistorySnapshot()
+    this.queueAutosave()
+    return cb
+  }
+
+  addCheckBoxFromPlaceholder() {
+    const value = this.cboxPh?.nativeElement.innerHTML || ''
+    this.cboxPh?.nativeElement.replaceChildren()
+    if (value.trim()) this.addCheckBox(value)
+  }
+
+  cboxInputFocus(event: FocusEvent) {
+    const el = event.target as HTMLDivElement
+    if (this.cboxSuggestionBlurTimer) clearTimeout(this.cboxSuggestionBlurTimer)
+    const focusedId = Number(el.dataset['cboxId'])
+    this.activeCboxSuggestionRowId = Number.isFinite(focusedId) ? focusedId : undefined
+    const focusRange = this.pendingCboxFocusRange
+    this.pendingCboxFocusRange = undefined
+    this.rememberTextHistoryTarget(el)
+    setTimeout(() => {
+      if (document.activeElement !== el) return
+      const id = Number(el.dataset['cboxId'])
+      const pending = this.pendingCboxFocusPoint
+      if (pending && pending.id === id) {
+        this.pendingCboxFocusPoint = undefined
+        this.placeCboxCaretAtPoint(el, pending.x, pending.y)
+        return
+      }
+      const range = document.createRange()
+      const sel = window.getSelection()
+      if (focusRange && el.contains(focusRange.commonAncestorContainer)) {
+        sel?.removeAllRanges()
+        sel?.addRange(focusRange)
+        return
+      }
+      range.selectNodeContents(el)
+      range.collapse(false)
+      sel?.removeAllRanges()
+      sel?.addRange(range)
+    }, 0)
+  }
+
+  cboxInputBlur(id: number) {
+    if (this.cboxSuggestionBlurTimer) clearTimeout(this.cboxSuggestionBlurTimer)
+    this.cboxSuggestionBlurTimer = setTimeout(() => {
+      const focused = document.activeElement as HTMLElement | null
+      if (focused?.closest(`[data-cbox-suggestion-draft-id="${id}"]`)) return
+      if (this.activeCboxSuggestionRowId === id) {
+        this.activeCboxSuggestionRowId = undefined
+        this.cd.detectChanges()
+      }
+    }, 150)
+  }
+
+  cboxTextTouchStart(event: TouchEvent, id: number, el: HTMLDivElement) {
+    const touch = event.touches[0]
+    if (!touch) return
+    const wasFocused = document.activeElement === el
+    if (!wasFocused) el.contentEditable = 'false'
+    this.cboxTextTouch = {
+      id,
+      x: touch.clientX,
+      y: touch.clientY,
+      moved: false,
+      wasFocused,
+      disabledEditing: !wasFocused
+    }
+  }
+
+  cboxTextTouchMove(event: TouchEvent, id: number, el: HTMLDivElement) {
+    const touch = event.touches[0]
+    const start = this.cboxTextTouch
+    if (!touch || !start || start.id !== id) return
+    const dx = Math.abs(touch.clientX - start.x)
+    const dy = Math.abs(touch.clientY - start.y)
+    if (dx <= 10 && dy <= 10) return
+
+    start.moved = true
+    this.pendingCboxFocusPoint = undefined
+    if (!start.wasFocused && document.activeElement === el) el.blur()
+  }
+
+  cboxTextTouchCancel(id: number, el: HTMLDivElement) {
+    if (this.cboxTextTouch?.id === id) {
+      if (this.cboxTextTouch.disabledEditing) el.contentEditable = 'true'
+      this.cboxTextTouch = undefined
+    }
+  }
+
+  focusCboxFromTouch(event: TouchEvent, id: number, el: HTMLDivElement) {
+    const touch = event.changedTouches[0]
+    if (!touch) return
+    const start = this.cboxTextTouch
+    this.cboxTextTouch = undefined
+    if (!start || start.id !== id) return
+    if (start.disabledEditing) el.contentEditable = 'true'
+    const dx = Math.abs(touch.clientX - start.x)
+    const dy = Math.abs(touch.clientY - start.y)
+    if (start.moved || dx > 10 || dy > 10) {
+      this.pendingCboxFocusPoint = undefined
+      if (!start.wasFocused && document.activeElement === el) el.blur()
+      return
+    }
+
+    this.pendingCboxFocusPoint = { id, x: touch.clientX, y: touch.clientY }
+    if (document.activeElement !== el) {
+      el.focus({ preventScroll: true })
+    }
+    requestAnimationFrame(() => {
+      const pending = this.pendingCboxFocusPoint
+      if (pending && pending.id === id && document.activeElement === el) {
+        this.pendingCboxFocusPoint = undefined
+        this.placeCboxCaretAtPoint(el, pending.x, pending.y)
+      }
+    })
+  }
+
+  private cboxCaretRangeAtPoint(el: HTMLDivElement, x: number, y: number) {
+    const doc = document as Document & {
+      caretRangeFromPoint?: (x: number, y: number) => Range | null,
+      caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node, offset: number } | null
+    }
+    let range = doc.caretRangeFromPoint?.(x, y) || null
+    if (!range) {
+      const position = doc.caretPositionFromPoint?.(x, y)
+      if (position) {
+        range = document.createRange()
+        range.setStart(position.offsetNode, position.offset)
+      }
+    }
+    if (!range || !el.contains(range.commonAncestorContainer)) {
+      range = document.createRange()
+      range.selectNodeContents(el)
+      range.collapse(false)
+    } else {
+      range.collapse(true)
+    }
+    return range
+  }
+
+  private placeCboxCaretAtPoint(el: HTMLDivElement, x: number, y: number) {
+    const range = this.cboxCaretRangeAtPoint(el, x, y)
+    const sel = window.getSelection()
+    sel?.removeAllRanges()
+    sel?.addRange(range)
+  }
+
+  onCboxInput(id: number, el?: HTMLDivElement) {
+    if (!this.checkBoxes.some(candidate => candidate.id === id)) return
+    if (el) this.cboxSuggestionDraftValues.set(id, el.innerHTML)
+    this.dismissedCboxSuggestionIds.delete(id)
+    this.lastCboxTextInputAt = Date.now()
+    this.cboxHistoryRedoMode = false
+    this.queueAutosave()
+  }
+
+  completedCboxSuggestions(id: number) {
+    if (this.activeCboxSuggestionRowId !== id || !this.cboxSuggestionEligibleIds.has(id) || this.dismissedCboxSuggestionIds.has(id)) return []
+    const draft = this.checkBoxes.find(item => item.id === id)
+    if (!draft || draft.done) return []
+    const query = this.normalizedCboxSuggestionText(this.cboxSuggestionDraftValues.get(id) ?? draft.data)
+    if (!query) return []
+
+    return this.checkBoxes
+      .filter(item => item.done && this.normalizedCboxSuggestionText(item.data).startsWith(query))
+      .slice(0, 5)
+  }
+
+  cboxSuggestionLabel(item: CheckboxI) {
+    return this.notePlainText(String(item.data || ''))
+  }
+
+  cboxSuggestionKeyDown(event: KeyboardEvent, draftId: number, completedId: number, index: number) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.stopPropagation()
+      this.restoreCompletedCboxSuggestion(draftId, completedId, event)
+      return
+    }
+    if (event.key === 'Escape') {
+      this.dismissCboxSuggestions(draftId, event, true)
+      return
+    }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+
+    event.preventDefault()
+    event.stopPropagation()
+    const buttons = this.cboxSuggestionButtons(draftId)
+    if (!buttons.length) return
+    const step = event.key === 'ArrowDown' ? 1 : -1
+    buttons[(index + step + buttons.length) % buttons.length]?.focus()
+  }
+
+  private focusFirstCboxSuggestion(draftId: number) {
+    requestAnimationFrame(() => this.cboxSuggestionButtons(draftId)[0]?.focus())
+  }
+
+  private cboxSuggestionButtons(draftId: number) {
+    return Array.from(document.querySelectorAll<HTMLButtonElement>(
+      `[data-cbox-suggestion-draft-id="${draftId}"] .cbox-restore-suggestion`
+    ))
+  }
+
+  private dismissCboxSuggestions(draftId: number, event: KeyboardEvent, restoreDraftFocus = false) {
+    event.preventDefault()
+    event.stopPropagation()
+    this.dismissedCboxSuggestionIds.add(draftId)
+    this.cd.detectChanges()
+
+    if (restoreDraftFocus) {
+      requestAnimationFrame(() => {
+        const draft = document.querySelector(`[data-cbox-id="${draftId}"]`) as HTMLDivElement | null
+        draft?.focus({ preventScroll: true })
+      })
+    }
+  }
+
+  restoreCompletedCboxSuggestion(draftId: number, completedId: number, event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    this.syncCboxDomIntoModel()
+
+    const draftIndex = this.checkBoxes.findIndex(item => item.id === draftId)
+    const completedIndex = this.checkBoxes.findIndex(item => item.id === completedId && item.done)
+    if (draftIndex < 0 || completedIndex < 0 || draftId === completedId) return
+
+    const draftIndent = this.checkboxIndentLevel(this.checkBoxes[draftIndex])
+    const subtreeIndexes = [completedIndex, ...this.childIndexesForParent(completedIndex)]
+    const subtreeIds = new Set(subtreeIndexes.map(index => this.checkBoxes[index].id))
+    const baseIndent = this.checkboxIndentLevel(this.checkBoxes[completedIndex])
+    const indentDelta = draftIndent - baseIndent
+    const restored = subtreeIndexes.map(index => ({
+      ...this.checkBoxes[index],
+      done: false,
+      indentLevel: normalizeIndentLevel(this.checkboxIndentLevel(this.checkBoxes[index]) + indentDelta)
+    }))
+    const removedBeforeDraft = subtreeIndexes.filter(index => index < draftIndex).length
+    const remaining = this.checkBoxes.filter(item => item.id !== draftId && !subtreeIds.has(item.id))
+    const insertAt = Math.max(0, Math.min(draftIndex - removedBeforeDraft, remaining.length))
+    remaining.splice(insertAt, 0, ...restored)
+
+    this.checkBoxes = normalizeIndentLevels(remaining)
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.cboxSuggestionEligibleIds.delete(draftId)
+    this.cboxSuggestionDraftValues.delete(draftId)
+    this.dismissedCboxSuggestionIds.delete(draftId)
+    this.activeCboxSuggestionRowId = undefined
+    this.inputLength.next({ ...this.inputLength.value, cb: this.checkBoxes.length })
+    this.pushCboxHistorySnapshot()
+    this.cd.detectChanges()
+    this.queueAutosave()
+
+    requestAnimationFrame(() => {
+      const restoredEl = document.querySelector(`[data-cbox-id="${completedId}"]`) as HTMLDivElement | null
+      restoredEl?.focus({ preventScroll: true })
+    })
+  }
+
+  private normalizedCboxSuggestionText(value: unknown) {
+    return this.notePlainText(String(value || '')).toLocaleLowerCase().trim()
+  }
+
+  cBoxKeyDown($event: KeyboardEvent, id: number) {
+    if ($event.isComposing || $event.keyCode === 229) return
+    let target = $event.target as HTMLDivElement
+    const suggestions = this.completedCboxSuggestions(id)
+    if ($event.key === 'Escape' && suggestions.length) {
+      this.dismissCboxSuggestions(id, $event)
+      return
+    }
+    if ($event.key === 'Tab') {
+      if (!$event.shiftKey && suggestions.length) {
+        $event.preventDefault()
+        $event.stopPropagation()
+        this.focusFirstCboxSuggestion(id)
+        return
+      }
+      $event.preventDefault()
+      this.adjustCboxIndentLevel(id, $event.shiftKey ? -1 : 1)
+      return
+    }
+    if ($event.key === 'Enter') {
+      $event.preventDefault()
+      this.splitCboxAtSelection(id, target)
+      return
+    }
+    if (($event.key === 'ArrowUp' || $event.key === 'ArrowDown') &&
+      !$event.shiftKey && !$event.ctrlKey && !$event.metaKey && !$event.altKey) {
+      if (this.moveCboxCaretVertically(target, $event.key === 'ArrowDown' ? 1 : -1)) $event.preventDefault()
+      return
+    }
+    if ($event.key === 'Backspace') {
+      if (this.joinCboxAtStart(id, target)) $event.preventDefault()
+    }
+  }
+
+  cboxBeforeInput(event: InputEvent, id: number) {
+    // Mobile keyboards may send beforeinput without a usable keydown.
+    if (event.isComposing) return
+    if (event.inputType === 'deleteContentBackward') {
+      if (this.joinCboxAtStart(id, event.currentTarget as HTMLDivElement)) event.preventDefault()
+      return
+    }
+    if (!['insertParagraph', 'insertLineBreak'].includes(event.inputType)) return
+    event.preventDefault()
+    this.splitCboxAtSelection(id, event.currentTarget as HTMLDivElement)
+  }
+
+  private visibleCboxInputs() {
+    return Array.from(this.noteContainer.nativeElement.querySelectorAll<HTMLDivElement>('[data-cbox-id]'))
+      .filter(el => el.getClientRects().length > 0)
+  }
+
+  private focusCboxAtRange(el: HTMLDivElement, range: Range) {
+    this.pendingCboxFocusRange = range.cloneRange()
+    el.focus()
+    const selection = window.getSelection()
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+    this.pendingCboxFocusRange = undefined
+  }
+
+  private joinCboxAtStart(id: number, target: HTMLDivElement) {
+    const selection = window.getSelection()
+    if (!selection?.isCollapsed || !selection.rangeCount) return false
+    const caret = selection.getRangeAt(0)
+    if (!target.contains(caret.startContainer)) return false
+    const prefix = document.createRange()
+    prefix.selectNodeContents(target)
+    prefix.setEnd(caret.startContainer, caret.startOffset)
+    const content = prefix.cloneContents()
+    if (content.textContent || content.querySelector('br, img')) return false
+
+    const inputs = this.visibleCboxInputs()
+    const previous = inputs[inputs.indexOf(target) - 1]
+    // There is no row to join into above the first visible item.
+    if (!previous) return true
+    this.syncCboxDomIntoModel()
+    this.pushCboxHistorySnapshot()
+    const previousId = Number(previous.dataset['cboxId'])
+    const previousRow = this.checkBoxes.find(cb => cb.id === previousId)
+    if (!previousRow) return true
+    const offset = previous.textContent?.length || 0
+    if (!previous.textContent && !previous.querySelector('img')) previous.replaceChildren()
+    if (target.textContent || target.querySelector('img')) {
+      previous.append(...Array.from(target.cloneNode(true).childNodes))
+    }
+    previousRow.data = previous.innerHTML
+    this.cboxSuggestionDraftValues.set(previousId, previousRow.data)
+    this.cboxTools(id).remove()
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.cd.detectChanges()
+
+    // The binding may have rebuilt the rich text, so find the join in the new DOM.
+    const range = document.createRange()
+    range.selectNodeContents(previous)
+    range.collapse(false)
+    const walker = document.createTreeWalker(previous, NodeFilter.SHOW_TEXT)
+    let remaining = offset
+    let text: Node | null
+    while ((text = walker.nextNode())) {
+      if (remaining <= (text.textContent?.length || 0)) {
+        range.setStart(text, remaining)
+        range.collapse(true)
+        break
+      }
+      remaining -= text.textContent?.length || 0
+    }
+    this.focusCboxAtRange(previous, range)
+    return true
+  }
+
+  private moveCboxCaretVertically(target: HTMLDivElement, direction: number) {
+    const selection = window.getSelection()
+    if (!selection?.isCollapsed || !selection.rangeCount) return false
+    const caret = selection.getRangeAt(0)
+    if (!target.contains(caret.startContainer)) return false
+    const contents = document.createRange()
+    contents.selectNodeContents(target)
+    const lines = Array.from(contents.getClientRects()).filter(rect => rect.height > 0)
+    const caretRect = caret.getClientRects()[0] || target.getBoundingClientRect()
+    if (lines.length) {
+      const firstTop = Math.min(...lines.map(rect => rect.top))
+      const lastBottom = Math.max(...lines.map(rect => rect.bottom))
+      // Let the browser navigate within a row that wraps onto several lines.
+      if (direction < 0 && caretRect.top > firstTop + caretRect.height / 2) return false
+      if (direction > 0 && caretRect.bottom < lastBottom - caretRect.height / 2) return false
+    }
+    const inputs = this.visibleCboxInputs()
+    const next = inputs[inputs.indexOf(target) + direction]
+    if (!next) return false
+    contents.selectNodeContents(next)
+    const nextLines = Array.from(contents.getClientRects()).filter(rect => rect.height > 0)
+    const line = direction > 0 ? nextLines[0] : nextLines[nextLines.length - 1]
+    const bounds = next.getBoundingClientRect()
+    const x = Math.max(bounds.left + 1, Math.min(caretRect.left, bounds.right - 1))
+    const y = line ? (line.top + line.bottom) / 2 : bounds.top + bounds.height / 2
+    this.focusCboxAtRange(next, this.cboxCaretRangeAtPoint(next, x, y))
+    return true
+  }
+
+  private splitCboxAtSelection(id: number, target: HTMLDivElement) {
+    this.syncCboxDomIntoModel()
+    const current = this.checkBoxes.find(cb => cb.id === id)
+    if (!current) return
+    this.pushCboxHistorySnapshot()
+
+    const selection = window.getSelection()
+    let range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+    if (!range || !target.contains(range.startContainer) || !target.contains(range.endContainer)) {
+      range = document.createRange()
+      range.selectNodeContents(target)
+      range.collapse(false)
+    }
+    const before = document.createRange()
+    before.selectNodeContents(target)
+    before.setEnd(range.startContainer, range.startOffset)
+    const after = document.createRange()
+    after.selectNodeContents(target)
+    after.setStart(range.endContainer, range.endOffset)
+    const html = (part: Range) => {
+      const container = document.createElement('div')
+      container.append(part.cloneContents())
+      return container.textContent || container.querySelector('br, img') ? container.innerHTML : ''
+    }
+    const beforeHtml = html(before)
+    const afterHtml = html(after)
+    target.innerHTML = beforeHtml
+    current.data = beforeHtml
+    this.cboxSuggestionDraftValues.set(id, beforeHtml)
+    const next = this.addCheckBox(afterHtml, id, { done: current.done })
+    this.cd.detectChanges()
+    const nextEl = this.noteContainer.nativeElement.querySelector<HTMLDivElement>(`[data-cbox-id="${next.id}"]`)
+    if (!nextEl) return
+    const caret = document.createRange()
+    caret.selectNodeContents(nextEl)
+    caret.collapse(true)
+    this.focusCboxAtRange(nextEl, caret)
+  }
+
+
+  cboxPrepareDrag(id: number) {
+    this.dragReadyCboxId = id
+  }
+
+  cboxCancelDrag() {
+    this.dragReadyCboxId = undefined
+  }
+
+  cboxDragStart(id: number, event: DragEvent) {
+    this.syncCboxDomIntoModel()
+    this.draggedCboxId = id
+    this.cboxDragOrderChanged = false
+    this.cboxTouchIndentHandled = false
+    this.cboxTouchStartX = event.clientX
+    this.cboxTouchStartY = event.clientY
+    this.cboxTouchStartIndent = this.checkboxIndentLevel(this.checkBoxes.find(cb => cb.id === id))
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+      const row = event.currentTarget as HTMLElement
+      this.createCboxDragImage(row, event.clientX, event.clientY)
+      this.moveCboxDragImage(event)
+      event.dataTransfer.setDragImage(this.getTransparentDragImage(), 0, 0)
+    }
+  }
+
+  onNoteBodyInput(body: HTMLDivElement) {
+    this.dismissMobileNewNoteStarters()
+    const saveHtml = this.cleanEditorBodyForSave(body.innerHTML)
+    this.updateInputLength({ body: saveHtml.length })
+    this.queueAutosave()
+  }
+
+  onNoteTitleInput() {
+    this.dismissMobileNewNoteStarters()
+    this.updateInputLength({ title: this.noteTitle.nativeElement.innerHTML.length })
+    this.queueAutosave()
+  }
+
+  private queueAutosave() {
+    if (this.destroyed || this.noteMain?.nativeElement.hidden) return
+    this.autoSaveSubject.next()
+  }
+
+  private flushAutosave = () => {
+    if (this.destroyed || !this.noteMain || this.noteMain.nativeElement.hidden) return
+    if (this.currentNoteId() || this.canSaveNote) void this.saveNote(false)
+  }
+
+  private visibilitySave = () => {
+    if (document.visibilityState === 'hidden') this.flushAutosave()
+  }
+
+  private async bindBackgroundSave() {
+    if (!Capacitor.isNativePlatform()) return
+    const app = ((window as any).Capacitor?.Plugins?.App || registerPlugin<EditorAppPlugin>('App')) as EditorAppPlugin
+    for (const event of ['pause', 'appStateChange'] as const) {
+      try {
+        const handle = await app.addListener(event, state => {
+          if (event === 'pause' || state.isActive === false) this.zone.run(this.flushAutosave)
+        })
+        if (this.destroyed) await handle.remove()
+        else this.backgroundSaveHandles.push(handle)
+      } catch (error) {
+        console.warn('Could not register note background save', error)
+      }
+    }
+  }
+
+  private isSharedEditingNote() {
+    const me = this.auth.currentUser?.id
+    return !!(
+      this.activeEditors.length ||
+      (this.noteToEdit.ownerUserId && me && this.noteToEdit.ownerUserId !== me) ||
+      this.noteToEdit.collaborators?.length
+    )
+  }
+
+  private extractUrlsFromHtml(html: string) {
+    const urls = new Set<string>()
+    const div = createNoteHtmlContainer()
+    div.innerHTML = sanitizeNoteHtml(html || '')
+
+    div.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
+      const href = anchor.href || anchor.getAttribute('href') || ''
+      if (/^https?:\/\//i.test(href)) urls.add(href)
+    })
+
+    const text = div.textContent || ''
+    const matches = text.match(/https?:\/\/[^\s"'<>]+/g) || []
+    matches.forEach(url => urls.add(url.replace(/[),.;:!?]+$/, '')))
+
+    return [...urls].slice(0, 3)
+  }
+
+  private decorateLinksForEditor(html: string) {
+    if (!this.preferences.value.richLinkPreviews || this.noteToEdit?.linkPreviews === false) return this.auth.authenticatedImageHtml(html || '')
+    const div = createNoteHtmlContainer()
+    div.innerHTML = sanitizeNoteHtml(this.auth.authenticatedImageHtml(html || ''))
+    this.removePreviewMarkup(div)
+    this.decorateEditorLinks(div)
+    return div.innerHTML
+  }
+
+  private decorateEditorLinks(div: HTMLElement) {
+    div.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(anchor => {
+      if (anchor.closest('.editor-link-preview-slot')) return
+      const href = anchor.href || anchor.getAttribute('href') || ''
+      if (!/^https?:\/\//i.test(href)) return
+      const marker = document.createElement('span')
+      marker.className = 'editor-link-preview-slot'
+      marker.contentEditable = 'false'
+      marker.dataset['url'] = href
+      marker.dataset['originalHtml'] = anchor.outerHTML
+      this.replaceEditorLink(anchor, marker)
+    })
+
+    const walker = document.createTreeWalker(div, NodeFilter.SHOW_TEXT, {
+      acceptNode: node => {
+        const parent = node.parentElement
+        if (!parent || parent.closest('.editor-hidden-link, .editor-link-preview-slot')) return NodeFilter.FILTER_REJECT
+        return /https?:\/\/[^\s"'<>]+/.test(node.textContent || '') ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
+      }
+    })
+    const textNodes: Text[] = []
+    while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+
+    textNodes.forEach(node => {
+      const text = node.textContent || ''
+      // Split from the end so existing ranges in surrounding text remain live.
+      for (const match of [...text.matchAll(/https?:\/\/[^\s"'<>]+/g)].reverse()) {
+        const rawUrl = match[0]
+        const start = match.index || 0
+        const visibleUrl = rawUrl.replace(/[),.;:!?]+$/, '')
+        if (!visibleUrl) continue
+        const linkText = node.splitText(start)
+        linkText.splitText(visibleUrl.length)
+        const marker = document.createElement('span')
+        marker.className = 'editor-link-preview-slot'
+        marker.contentEditable = 'false'
+        marker.dataset['url'] = visibleUrl
+        marker.dataset['originalHtml'] = visibleUrl
+        this.replaceEditorLink(linkText, marker)
+      }
+    })
+  }
+
+  private replaceEditorLink(node: Node, marker: HTMLElement) {
+    const body = this.noteBody?.nativeElement
+    const selection = window.getSelection()
+    const range = selection?.rangeCount && body?.contains(node) ? selection.getRangeAt(0) : undefined
+    const parent = node.parentNode!
+    const index = Array.prototype.indexOf.call(parent.childNodes, node)
+    const edge = (container: Node, offset: number): 'before' | 'after' | undefined => {
+      if (container === parent && offset === index) return 'before'
+      if (container === parent && offset === index + 1) return 'after'
+      if (!node.contains(container)) return undefined
+      const prefix = document.createRange()
+      prefix.selectNodeContents(node)
+      prefix.setEnd(container, offset)
+      return prefix.toString().length ? 'after' : 'before'
+    }
+    const start = range && edge(range.startContainer, range.startOffset)
+    const end = range && edge(range.endContainer, range.endOffset)
+    parent.replaceChild(marker, node)
+    if (!range || (!start && !end)) return
+    const startPoint = start ? [parent, index + (start === 'after' ? 1 : 0)] as const : [range.startContainer, range.startOffset] as const
+    const endPoint = end ? [parent, index + (end === 'after' ? 1 : 0)] as const : [range.endContainer, range.endOffset] as const
+    range.setStart(...startPoint)
+    range.setEnd(...endPoint)
+    selection!.removeAllRanges()
+    selection!.addRange(range)
+  }
+
+  private ensureEditorLinkCaretLines(body: HTMLElement) {
+    const selection = window.getSelection()
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : undefined
+    for (const slot of body.querySelectorAll<HTMLElement>('.editor-link-preview-slot')) {
+      for (const before of [true, false]) {
+        let edge: Node = slot
+        let neighbor = before ? edge.previousSibling : edge.nextSibling
+        // Put lines outside a paragraph/formatting wrapper when the preview
+        // occupies its edge, rather than nesting a div inside a paragraph.
+        while (!neighbor && edge.parentElement !== body && edge.parentElement &&
+          /^(P|SPAN|A|B|STRONG|I|EM|U|S|FONT|H[1-6])$/.test(edge.parentElement.tagName)) {
+          edge = edge.parentElement
+          neighbor = before ? edge.previousSibling : edge.nextSibling
+        }
+        while (neighbor?.nodeType === Node.TEXT_NODE && !neighbor.textContent) {
+          neighbor = before ? neighbor.previousSibling : neighbor.nextSibling
+        }
+        if (neighbor && !(neighbor instanceof HTMLElement && neighbor.contentEditable === 'false')) continue
+        const parent = edge.parentElement!
+        const index = Array.prototype.indexOf.call(parent.childNodes, edge) + (before ? 0 : 1)
+        // splitText can leave empty text nodes between the caret and card.
+        // They are the same visible boundary and must enter the new line too.
+        const caretOffset = range?.startContainer === parent ? range.startOffset
+          : range?.startContainer.parentNode === parent && range.startContainer.nodeType === Node.TEXT_NODE && !range.startContainer.textContent
+            ? Array.prototype.indexOf.call(parent.childNodes, range.startContainer) : -1
+        const moveCaret = range?.collapsed && caretOffset >= 0 &&
+          (before ? caretOffset <= index : caretOffset >= index) &&
+          Array.from(parent.childNodes).slice(Math.min(index, caretOffset), Math.max(index, caretOffset))
+            .every(node => node.nodeType === Node.TEXT_NODE && !node.textContent)
+        const line = document.createElement(/^(P|SPAN|A|B|STRONG|I|EM|U|S|FONT|H[1-6])$/.test(parent.tagName) ? 'span' : 'div')
+        line.className = 'editor-link-caret-line'
+        line.append(document.createElement('br'))
+        parent.insertBefore(line, before ? edge : edge.nextSibling)
+        if (moveCaret) {
+          range!.setStart(line, 0)
+          range!.collapse(true)
+          selection!.removeAllRanges()
+          selection!.addRange(range!)
+        }
+      }
+    }
+    this.rememberBodySelection()
+  }
+
+  private cleanEditorBodyForSave(html: string) {
+    const div = createNoteHtmlContainer()
+    div.innerHTML = sanitizeNoteHtml(this.auth.canonicalImageHtml(html || ''))
+    this.removePreviewMarkup(div)
+    // Strip editor-only chrome (e.g. the inline image delete button) that lives
+    // inside the editable body but has no business being persisted.
+    div.querySelectorAll('[data-inline-image-tool]').forEach(el => el.remove())
+    div.querySelectorAll<HTMLElement>('.editor-link-caret-line').forEach(line => {
+      if (!line.textContent && !line.querySelector('img, hr, .editor-link-preview-slot')) {
+        line.remove()
+        return
+      }
+      // Keep text entered on a generated line, with real line breaks, but
+      // don't persist empty cursor targets or editor-only layout classes.
+      if (line.previousSibling && line.previousSibling.nodeName !== 'BR' && line.firstChild?.nodeName !== 'BR') line.before(document.createElement('br'))
+      if (line.nextSibling && line.nextSibling.nodeName !== 'BR' && line.lastChild?.nodeName !== 'BR') line.after(document.createElement('br'))
+      line.replaceWith(...Array.from(line.childNodes))
+    })
+    div.querySelectorAll<HTMLElement>('.editor-link-preview-slot').forEach(marker => {
+      const template = document.createElement('template')
+      template.innerHTML = sanitizeNoteHtml(marker.dataset['originalHtml'] || marker.dataset['url'] || '')
+      marker.replaceWith(template.content)
+    })
+    return div.innerHTML
+  }
+
+  private removePreviewMarkup(root: HTMLElement) {
+    root.querySelectorAll<HTMLElement>('.editor-link-preview-slot').forEach(marker => {
+      marker.querySelectorAll('.editor-link-preview-card').forEach(el => el.remove())
+    })
+    root.querySelectorAll<HTMLElement>('app-link-preview, .editor-link-previews, .lp-card, .editor-link-preview-card').forEach(el => el.remove())
+  }
+
+  private decorateCurrentBodyLinks() {
+    const body = this.noteBody?.nativeElement
+    if (!body || this.destroyed) return
+    if (!this.preferences.value.richLinkPreviews || this.noteToEdit?.linkPreviews === false) {
+      if (body.querySelector('.editor-link-preview-slot')) {
+        this.editorPreviewGeneration++
+        body.innerHTML = sanitizeNoteHtml(this.auth.authenticatedImageHtml(this.cleanEditorBodyForSave(body.innerHTML)))
+      }
+      return
+    }
+    this.decorateEditorLinks(body)
+    this.hydrateEditorLinkPreviews()
+  }
+
+  private queueEditorLinkDecoration() {
+    if (this.editorLinkDecorationFrame) cancelAnimationFrame(this.editorLinkDecorationFrame)
+    this.editorLinkDecorationFrame = requestAnimationFrame(() => {
+      this.editorLinkDecorationFrame = undefined
+      if (this.destroyed) return
+      const body = this.noteBody?.nativeElement
+      if (!body) return
+      this.decorateCurrentBodyLinks()
+      this.onNoteBodyInput(body)
+    })
+  }
+
+  private hydrateEditorLinkPreviews() {
+    if (!this.preferences.value.richLinkPreviews || this.noteToEdit?.linkPreviews === false) return
+    const body = this.noteBody?.nativeElement
+    if (!body || this.destroyed) return
+    this.ensureEditorLinkCaretLines(body)
+    const generation = this.editorPreviewGeneration
+    body.querySelectorAll<HTMLElement>('.editor-link-preview-slot:not([data-hydrated])').forEach(slot => {
+      const url = slot.dataset['url']
+      if (!url) return
+      slot.dataset['hydrated'] = 'true'
+      slot.replaceChildren(this.editorPreviewShell(url))
+      this.notesService.getLinkPreview(url)
+        .then(preview => {
+          if (!this.isLiveEditorPreviewSlot(slot, generation)) return
+          slot.replaceChildren(this.editorPreviewCard(url, preview))
+        })
+        .catch(() => {
+          if (!this.isLiveEditorPreviewSlot(slot, generation)) return
+          slot.replaceChildren(this.editorPreviewCard(url))
+        })
+    })
+  }
+
+  private isLiveEditorPreviewSlot(slot: HTMLElement, generation: number) {
+    const body = this.noteBody?.nativeElement
+    return !this.destroyed
+      && generation === this.editorPreviewGeneration
+      && !!body
+      && slot.isConnected
+      && body.contains(slot)
+  }
+
+  private editorPreviewShell(url: string) {
+    const card = document.createElement('span')
+    card.className = 'editor-link-preview-card loading'
+    card.contentEditable = 'false'
+    card.textContent = this.linkDomain(url)
+    card.prepend(this.editorPreviewRemoveButton())
+    return card
+  }
+
+  private editorPreviewCard(url: string, preview?: LinkPreviewData) {
+    const card = document.createElement('span')
+    card.className = 'editor-link-preview-card'
+    card.contentEditable = 'false'
+    card.draggable = true
+    card.title = preview?.url || url
+    card.addEventListener('click', event => {
+      event.stopPropagation()
+      window.open(preview?.url || url, '_blank', 'noopener,noreferrer')
+    })
+    card.append(this.editorPreviewRemoveButton())
+
+    if (preview?.image) {
+      const img = document.createElement('img')
+      img.className = 'editor-link-preview-thumb'
+      img.src = preview.image
+      img.alt = preview.title || ''
+      img.addEventListener('error', () => img.remove())
+      card.append(img)
+    }
+
+    const text = document.createElement('span')
+    text.className = 'editor-link-preview-text'
+    const title = document.createElement('span')
+    title.className = 'editor-link-preview-title'
+    title.textContent = preview?.title || this.linkDomain(url) || url
+    const domain = document.createElement('span')
+    domain.className = 'editor-link-preview-domain'
+    domain.textContent = preview?.domain || this.linkDomain(url)
+    text.append(title, domain)
+    card.append(text)
+
+    const copy = document.createElement('button')
+    copy.type = 'button'
+    copy.className = 'editor-link-preview-action'
+    copy.title = 'Copy link'
+    copy.innerHTML = '<span class="material-symbols-outlined">link</span>'
+    copy.addEventListener('click', event => {
+      event.stopPropagation()
+      this.copyLink(url)
+      copy.title = 'Copied'
+      setTimeout(() => copy.title = 'Copy link', 1200)
+    })
+
+    const open = document.createElement('button')
+    open.type = 'button'
+    open.className = 'editor-link-preview-action'
+    open.title = 'Open link'
+    open.innerHTML = '<span class="material-symbols-outlined">open_in_new</span>'
+    open.addEventListener('click', event => {
+      event.stopPropagation()
+      window.open(preview?.url || url, '_blank', 'noopener,noreferrer')
+    })
+    card.append(copy, open)
+    return card
+  }
+
+  private editorPreviewRemoveButton() {
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.className = 'editor-link-preview-remove'
+    remove.title = 'Remove link preview'
+    remove.setAttribute('aria-label', 'Remove link preview')
+    remove.innerHTML = '<span class="material-symbols-outlined">close</span>'
+    remove.addEventListener('mousedown', event => event.stopPropagation())
+    remove.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      const slot = remove.closest('.editor-link-preview-slot')
+      slot?.remove()
+      if (this.noteBody?.nativeElement) this.onNoteBodyInput(this.noteBody.nativeElement)
+    })
+    return remove
+  }
+
+  private async copyLink(url: string) {
+    try {
+      await navigator.clipboard.writeText(url)
+    } catch {
+      const textarea = document.createElement('textarea')
+      textarea.value = url
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      textarea.remove()
+    }
+  }
+
+  private linkDomain(url: string) {
+    try {
+      return new URL(url).hostname.replace(/^www\./, '')
+    } catch {
+      return ''
+    }
+  }
+
+  toggleTextFormatting(event: Event) {
+    event.stopPropagation()
+    this.showTextFormatting = !this.showTextFormatting
+    if (this.showTextFormatting) this.showSelectionFormatting = false
+  }
+
+  private scheduleSelectionFormattingUpdate() {
+    if (this.textSelectionFrame) return
+    this.textSelectionFrame = requestAnimationFrame(() => {
+      this.textSelectionFrame = undefined
+      this.zone.run(() => this.updateSelectionFormatting())
+    })
+  }
+
+  private updateSelectionFormatting() {
+    if (this.destroyed || this.showTextFormatting || this.isDrawingNote || !this.canFormatText() || this.shouldUseMobileFormattingBar()) {
+      this.showSelectionFormatting = false
+      return
+    }
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      this.showSelectionFormatting = false
+      return
+    }
+    const range = selection.getRangeAt(0)
+    if (!this.selectionBelongsToTextEditor(range)) {
+      this.showSelectionFormatting = false
+      return
+    }
+    const rect = this.firstVisibleRangeRect(range)
+    const noteRect = this.noteMain?.nativeElement.getBoundingClientRect()
+    if (!rect || !noteRect) {
+      this.showSelectionFormatting = false
+      return
+    }
+    const toolbarHalfWidth = 132
+    const minLeft = toolbarHalfWidth + 8
+    const maxLeft = Math.max(minLeft, noteRect.width - toolbarHalfWidth - 8)
+    const left = Math.min(maxLeft, Math.max(minLeft, rect.left + rect.width / 2 - noteRect.left))
+    let top = rect.top - noteRect.top - 48
+    if (top < 8) top = rect.bottom - noteRect.top + 8
+    this.selectionFormattingStyle = {
+      left: `${left}px`,
+      top: `${Math.min(noteRect.height - 48, Math.max(8, top))}px`
+    }
+    this.showSelectionFormatting = true
+  }
+
+  private selectionBelongsToTextEditor(range: Range) {
+    const container = range.commonAncestorContainer
+    const element = container.nodeType === Node.ELEMENT_NODE
+      ? container as Element
+      : container.parentElement
+    if (!element) return false
+    const title = this.noteTitle?.nativeElement
+    const body = this.noteBody?.nativeElement
+    return !!(title?.contains(element) || body?.contains(element))
+  }
+
+  private firstVisibleRangeRect(range: Range) {
+    const rects = Array.from(range.getClientRects()).filter(rect => rect.width || rect.height)
+    return rects[0] || range.getBoundingClientRect()
+  }
+
+  private shouldUseMobileFormattingBar() {
+    return window.matchMedia('(max-width: 599px), (max-height: 500px) and (orientation: landscape)').matches
+  }
+
+  rememberTextHistoryTarget(target?: HTMLElement | null) {
+    if (!target?.isContentEditable) return
+    this.textHistoryTarget = target
+  }
+
+  runTextHistory(command: 'undo' | 'redo', event: Event) {
+    event.preventDefault()
+    event.stopPropagation()
+
+    if (this.shouldUseCboxHistory(command)) {
+      this.stepCboxHistory(command)
+      return
+    }
+
+    const target = this.activeTextHistoryTarget()
+    target?.focus({ preventScroll: true })
+    document.execCommand(command)
+    this.scheduleTextHistoryRefresh()
+  }
+
+  private activeTextHistoryTarget() {
+    const active = document.activeElement as HTMLElement | null
+    if (active?.isContentEditable) {
+      this.textHistoryTarget = active
+      return active
+    }
+    if (this.textHistoryTarget?.isConnected) return this.textHistoryTarget
+    return this.noteBody?.nativeElement || this.noteTitle?.nativeElement
+  }
+
+  private scheduleTextHistoryRefresh() {
+    setTimeout(() => {
+      this.updateInputLength({
+        title: this.noteTitle?.nativeElement.innerHTML.length || 0,
+        body: this.noteBody?.nativeElement.innerHTML.length || 0
+      })
+      this.queueAutosave()
+    }, 0)
+  }
+
+  applyTextFormat(command: 'h1' | 'h2' | 'body' | 'bold' | 'italic' | 'underline' | 'clear', event: Event) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (command === 'h1') document.execCommand('formatBlock', false, 'H1')
+    if (command === 'h2') document.execCommand('formatBlock', false, 'H2')
+    if (command === 'body') document.execCommand('formatBlock', false, 'DIV')
+    if (command === 'bold') document.execCommand('bold')
+    if (command === 'italic') document.execCommand('italic')
+    if (command === 'underline') document.execCommand('underline')
+    if (command === 'clear') document.execCommand('removeFormat')
+    this.scheduleSelectionFormattingUpdate()
+    this.updateInputLength({
+      title: this.noteTitle?.nativeElement.innerHTML.length || 0,
+      body: this.noteBody?.nativeElement.innerHTML.length || 0
+    })
+    this.queueAutosave()
+  }
+
+  togglePinned() {
+    const pinned = this.notePin.nativeElement.dataset['pinned'] === 'true'
+    this.notePin.nativeElement.dataset['pinned'] = pinned ? 'false' : 'true'
+    this.queueAutosave()
+  }
+
+  openDrawingNote(event?: Event) {
+    event?.stopPropagation()
+    this.toggleNoteVisibility(true)
+    this.isDrawingNote = true
+    this.isCbox.next(false)
+    this.setupDrawingCanvas()
+    if (!this.isEditing) document.addEventListener('mousedown', this.mouseDownEvent)
+  }
+
+  private setupDrawingCanvas(loadImage = true) {
+    setTimeout(() => {
+      const canvas = this.drawingCanvas?.nativeElement
+      const wrap = this.drawingWrap?.nativeElement
+      if (!canvas || !wrap) return
+      const existingDrawing = this.images.find(image => image.id === 'drawing')
+      this.drawingBackground = this.drawingBackgroundFromImage(existingDrawing)
+      const rect = wrap.getBoundingClientRect()
+      if (loadImage && existingDrawing?.dataUrl) {
+        const image = new Image()
+        image.onload = () => {
+          const size = this.drawingCanvasSize(rect, image.naturalWidth, image.naturalHeight)
+          canvas.width = size.width
+          canvas.height = size.height
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return
+          ctx.clearRect(0, 0, canvas.width, canvas.height)
+          ctx.imageSmoothingEnabled = false
+          this.drawStoredDrawingImage(ctx, image)
+          this.pushDrawingHistory()
+        }
+        image.src = existingDrawing.dataUrl
+      } else {
+        const size = this.drawingCanvasSize(rect)
+        canvas.width = size.width
+        canvas.height = size.height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        this.pushDrawingHistory()
+      }
+      this.teardownDrawingResize()
+      this.drawingResize = new ResizeObserver(() => this.resizeDrawingCanvas())
+      this.drawingResize.observe(wrap)
+    })
+  }
+
+  private resizeDrawingCanvas() {
+    const canvas = this.drawingCanvas?.nativeElement
+    const wrap = this.drawingWrap?.nativeElement
+    if (!canvas || !wrap) return
+    const dataUrl = canvas.toDataURL('image/png')
+    const rect = wrap.getBoundingClientRect()
+    const width = Math.max(canvas.width, Math.floor(rect.width), 640)
+    const height = Math.max(canvas.height, Math.floor(rect.height), this.isDrawingFullscreen ? 520 : 360)
+    if (canvas.width === width && canvas.height === height) return
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    const image = new Image()
+    image.onload = () => {
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(image, 0, 0)
+      this.updateDrawingSelectionStyle()
+    }
+    image.src = dataUrl
+  }
+
+  private drawingCanvasSize(rect: DOMRect, imageWidth = 0, imageHeight = 0) {
+    return {
+      width: Math.max(640, Math.floor(rect.width), imageWidth),
+      height: Math.max(this.isDrawingFullscreen ? 520 : 360, Math.floor(rect.height), imageHeight)
+    }
+  }
+
+  private teardownDrawingResize() {
+    this.drawingResize?.disconnect()
+    this.drawingResize = undefined
+  }
+
+  drawingPointerDown(event: PointerEvent) {
+    this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+    if (this.activePointers.size > 1) {
+      if (this.isDrawing) {
+        this.isDrawing = false
+        this.restoreDrawingHistory()
+      }
+      this.isPanning = true
+      this.setupPinchState()
+      return
+    }
+
+    if (this.isPanning) return
+
+    // If a resize handle already captured this pointer, don't steal it.
+    if (this.movingSelection?.handle) return
+    this.drawingOpenToolMenu = undefined;
+    this.showDrawingBackgroundMenu = false;
+    this.showDrawingEraserMenu = false;
+    this.showDrawingMoreMenu = false;
+    const canvas = this.drawingCanvas?.nativeElement
+    if (!canvas) return
+    event.preventDefault()
+    try { canvas.setPointerCapture(event.pointerId) } catch {}
+    const point = this.drawingPoint(event)
+    if (this.drawingTool === 'select') {
+      this.startDrawingSelection(point)
+      return
+    }
+    this.isDrawing = true
+    this.drawingLastPoint = point
+  }
+
+  private setupPinchState() {
+    const pointers = Array.from(this.activePointers.values())
+    this.initialPinchDistance = this.getDistance(pointers[0], pointers[1])
+    this.initialPinchScale = this.drawingTransform.scale
+    this.initialPinchMidpoint = this.getMidpoint(pointers[0], pointers[1])
+    this.initialPinchTranslate = { x: this.drawingTransform.x, y: this.drawingTransform.y }
+  }
+
+  private handlePinchMove() {
+    const pointers = Array.from(this.activePointers.values())
+    const currentDistance = this.getDistance(pointers[0], pointers[1])
+    const currentMidpoint = this.getMidpoint(pointers[0], pointers[1])
+
+    if (this.initialPinchDistance && this.initialPinchScale !== undefined && this.initialPinchMidpoint) {
+      const deltaScale = currentDistance / this.initialPinchDistance
+      let newScale = this.initialPinchScale * deltaScale
+      newScale = Math.max(0.5, Math.min(newScale, 5))
+
+      // Calculate how much we actually scaled relative to the initial pinch start
+      const actualDeltaScale = newScale / this.initialPinchScale
+
+      // Zoom toward the midpoint:
+      // The new position is the current finger midpoint minus the scaled distance from the initial midpoint to the original top-left
+      const newX = currentMidpoint.x - (this.initialPinchMidpoint.x - this.initialPinchTranslate!.x) * actualDeltaScale
+      const newY = currentMidpoint.y - (this.initialPinchMidpoint.y - this.initialPinchTranslate!.y) * actualDeltaScale
+
+      this.drawingTransform = {
+        scale: newScale,
+        x: newX,
+        y: newY
+      }
+    }
+  }
+
+  private getDistance(p1: { x: number, y: number }, p2: { x: number, y: number }) {
+    return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2))
+  }
+
+  private getMidpoint(p1: { x: number, y: number }, p2: { x: number, y: number }) {
+    return { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }
+  }
+
+  drawingPointerMove(event: PointerEvent) {
+    this.activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+    if (this.activePointers.size === 2) {
+      this.handlePinchMove()
+      return
+    }
+
+    if (this.isPanning) return
+
+    if (this.drawingTool === 'select') {
+      this.updateDrawingSelection(this.drawingPoint(event))
+      return
+    }
+    if (!this.isDrawing || !this.drawingLastPoint) return
+    const point = this.drawingPoint(event)
+    const ctx = this.drawingCanvas?.nativeElement.getContext('2d')
+    if (!ctx) return
+    const tool = this.drawingTool
+    const options = tool === 'marker' ? this.drawingToolOptions.marker : tool === 'highlighter' ? this.drawingToolOptions.highlighter : this.drawingToolOptions.pen
+    ctx.save()
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over'
+    ctx.globalAlpha = tool === 'highlighter' ? 0.35 : 1
+    ctx.strokeStyle = options.color
+    ctx.lineWidth = tool === 'eraser' ? 24 : options.size
+    ctx.beginPath()
+    ctx.moveTo(this.drawingLastPoint.x, this.drawingLastPoint.y)
+    ctx.lineTo(point.x, point.y)
+    ctx.stroke()
+    ctx.restore()
+    this.drawingLastPoint = point
+  }
+
+  drawingPointerUp(event: PointerEvent) {
+    this.activePointers.delete(event.pointerId)
+    if (this.activePointers.size === 0) {
+      this.isPanning = false
+    }
+
+    if (this.drawingTool === 'select') {
+      this.finishDrawingSelection()
+      if (event.target && (event.target as HTMLElement).releasePointerCapture) { (event.target as HTMLElement).releasePointerCapture(event.pointerId) } else { this.drawingCanvas?.nativeElement.releasePointerCapture(event.pointerId) }
+      return
+    }
+    if (!this.isDrawing) return
+    this.isDrawing = false
+    this.drawingLastPoint = undefined
+    this.drawingCanvas?.nativeElement.releasePointerCapture(event.pointerId)
+    this.pushDrawingHistory()
+    this.syncDrawingImage()
+    this.queueAutosave()
+  }
+
+  startDrawingResize(handle: string, event: PointerEvent) {
+    try {
+      event.stopPropagation();
+      event.preventDefault();
+      const ctx = this.drawingCanvas?.nativeElement.getContext('2d');
+      if (!ctx || !this.drawingSelection) return;
+      const rect = this.normalizeSelection(this.drawingSelection);
+      if (rect.w < 1 || rect.h < 1) return;
+
+      const image = ctx.getImageData(rect.x, rect.y, rect.w, rect.h);
+      ctx.clearRect(rect.x, rect.y, rect.w, rect.h);
+      
+      const offscreen = document.createElement('canvas');
+      offscreen.width = rect.w;
+      offscreen.height = rect.h;
+      offscreen.getContext('2d')?.putImageData(image, 0, 0);
+
+      const point = this.drawingPoint(event);
+      this.movingSelection = {
+        canvas: offscreen,
+        offset: { x: point.x - rect.x, y: point.y - rect.y },
+        lastRect: rect,
+        handle,
+        aspectRatio: rect.w / rect.h,
+        fixedPoint: {
+          x: handle.includes('e') ? rect.x : rect.x + rect.w,
+          y: handle.includes('s') ? rect.y : rect.y + rect.h
+        }
+      };
+      this.isDrawing = true;
+      if (event.target && (event.target as HTMLElement).setPointerCapture) {
+        (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  private startDrawingSelection(point: DrawingPoint) {
+    try {
+      const existing = this.drawingSelection
+      if (existing && this.pointInSelection(point, existing)) {
+        const ctx = this.drawingCanvas?.nativeElement.getContext('2d')
+        if (!ctx) return
+        const rect = this.normalizeSelection(existing)
+        if (rect.w < 1 || rect.h < 1) return;
+        const image = ctx.getImageData(rect.x, rect.y, rect.w, rect.h)
+        ctx.clearRect(rect.x, rect.y, rect.w, rect.h)
+        
+        const offscreen = document.createElement('canvas');
+        offscreen.width = rect.w;
+        offscreen.height = rect.h;
+        offscreen.getContext('2d')?.putImageData(image, 0, 0);
+
+        this.movingSelection = {
+          canvas: offscreen,
+          offset: { x: point.x - rect.x, y: point.y - rect.y },
+          lastRect: rect
+        }
+        this.isDrawing = true
+        return
+      }
+      this.clearDrawingSelection()
+      this.drawingSelectionStart = point
+      this.drawingSelection = { x: point.x, y: point.y, w: 0, h: 0 }
+      this.updateDrawingSelectionStyle()
+      this.isDrawing = true
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  private updateDrawingSelection(point: DrawingPoint) {
+    try {
+      if (!this.isDrawing) return
+      if (this.movingSelection) {
+        const ctx = this.drawingCanvas?.nativeElement.getContext('2d')
+        if (!ctx) return
+        
+        let next = { ...this.movingSelection.lastRect };
+
+        if (this.movingSelection.handle) {
+          const handle = this.movingSelection.handle;
+          const ar = this.movingSelection.aspectRatio || 1;
+          const fixedX = this.movingSelection.fixedPoint!.x;
+          const fixedY = this.movingSelection.fixedPoint!.y;
+
+          let rawW = Math.abs(point.x - fixedX);
+          let rawH = Math.abs(point.y - fixedY);
+
+          let newW, newH;
+          if (rawW / ar > rawH) {
+            newW = rawW; newH = rawW / ar;
+          } else {
+            newH = rawH; newW = rawH * ar;
+          }
+
+          if (newW < 4 || newH < 4) { newW = 4; newH = 4 / ar; }
+
+          next.w = newW; next.h = newH;
+          next.x = handle.includes('e') ? fixedX : fixedX - newW;
+          next.y = handle.includes('s') ? fixedY : fixedY - newH;
+        } else {
+          next.x = Math.round(point.x - this.movingSelection.offset.x);
+          next.y = Math.round(point.y - this.movingSelection.offset.y);
+        }
+
+        ctx.clearRect(this.movingSelection.lastRect.x - 2, this.movingSelection.lastRect.y - 2, this.movingSelection.lastRect.w + 4, this.movingSelection.lastRect.h + 4)
+        if (next.w > 0 && next.h > 0) {
+          ctx.imageSmoothingEnabled = true
+          ctx.imageSmoothingQuality = 'high'
+          ctx.drawImage(this.movingSelection.canvas, next.x, next.y, next.w, next.h)
+        }
+        this.movingSelection.lastRect = next
+        this.drawingSelection = next
+        this.updateDrawingSelectionStyle()
+        return
+      }
+      if (!this.drawingSelectionStart) return
+      this.drawingSelection = {
+        x: this.drawingSelectionStart.x,
+        y: this.drawingSelectionStart.y,
+        w: point.x - this.drawingSelectionStart.x,
+        h: point.y - this.drawingSelectionStart.y
+      }
+      this.updateDrawingSelectionStyle()
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  private finishDrawingSelection() {
+    if (!this.isDrawing) return
+    this.isDrawing = false
+    this.drawingSelectionStart = undefined
+    if (this.movingSelection) {
+      this.movingSelection = undefined
+      this.pushDrawingHistory()
+      this.syncDrawingImage()
+      this.queueAutosave()
+      return
+    }
+    if (!this.drawingSelection || Math.abs(this.drawingSelection.w) < 4 || Math.abs(this.drawingSelection.h) < 4) {
+      this.clearDrawingSelection()
+      return
+    }
+    this.drawingSelection = this.normalizeSelection(this.drawingSelection)
+    this.updateDrawingSelectionStyle()
+  }
+
+  private normalizeSelection(selection: DrawingSelection): DrawingSelection {
+    return {
+      x: Math.round(selection.w < 0 ? selection.x + selection.w : selection.x),
+      y: Math.round(selection.h < 0 ? selection.y + selection.h : selection.y),
+      w: Math.round(Math.abs(selection.w)),
+      h: Math.round(Math.abs(selection.h))
+    }
+  }
+
+  private pointInSelection(point: DrawingPoint, selection: DrawingSelection) {
+    const rect = this.normalizeSelection(selection)
+    return point.x >= rect.x && point.x <= rect.x + rect.w && point.y >= rect.y && point.y <= rect.y + rect.h
+  }
+
+  private updateDrawingSelectionStyle() {
+    const canvas = this.drawingCanvas?.nativeElement
+    if (!canvas || !this.drawingSelection) {
+      this.drawingSelectionStyle = {}
+      return
+    }
+    const rect = this.normalizeSelection(this.drawingSelection)
+    this.drawingSelectionStyle = {
+      left: `${rect.x / canvas.width * 100}%`,
+      top: `${rect.y / canvas.height * 100}%`,
+      width: `${rect.w / canvas.width * 100}%`,
+      height: `${rect.h / canvas.height * 100}%`
+    }
+  }
+
+  clearDrawingSelection() {
+    this.drawingSelection = undefined
+    this.drawingSelectionStyle = {}
+    this.drawingSelectionStart = undefined
+    this.movingSelection = undefined
+  }
+
+  private drawingPoint(event: PointerEvent) {
+    const canvas = this.drawingCanvas!.nativeElement
+    const rect = canvas.getBoundingClientRect()
+    return {
+      x: (event.clientX - rect.left) * (canvas.width / rect.width),
+      y: (event.clientY - rect.top) * (canvas.height / rect.height)
+    }
+  }
+
+  private pushDrawingHistory() {
+    const canvas = this.drawingCanvas?.nativeElement
+    if (!canvas) return
+    this.drawingHistory = this.drawingHistory.slice(0, this.drawingHistoryIndex + 1)
+    this.drawingHistory.push(canvas.toDataURL('image/png'))
+    this.drawingHistoryIndex = this.drawingHistory.length - 1
+  }
+
+  undoDrawing() {
+    if (this.drawingHistoryIndex <= 0) return
+    this.drawingHistoryIndex--
+    this.restoreDrawingHistory()
+    this.syncDrawingImage()
+    this.queueAutosave()
+  }
+
+  redoDrawing() {
+    if (this.drawingHistoryIndex >= this.drawingHistory.length - 1) return
+    this.drawingHistoryIndex++
+    this.restoreDrawingHistory()
+    this.syncDrawingImage()
+    this.queueAutosave()
+  }
+
+  private restoreDrawingHistory() {
+    const canvas = this.drawingCanvas?.nativeElement
+    const ctx = canvas?.getContext('2d')
+    const dataUrl = this.drawingHistory[this.drawingHistoryIndex]
+    if (!canvas || !ctx || !dataUrl) return
+    const image = new Image()
+    image.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.imageSmoothingEnabled = false
+      ctx.drawImage(image, 0, 0)
+    }
+    image.src = dataUrl
+  }
+
+  toggleDrawingFullscreen() {
+    this.syncDrawingImage()
+    this.isDrawingFullscreen = !this.isDrawingFullscreen
+    this.setupDrawingCanvas()
+  }
+
+  newDrawing() {
+    this.clearDrawingCanvas()
+    this.showDrawingMoreMenu = false
+    this.queueAutosave()
+  }
+
+  deleteCurrentDrawing() {
+    this.clearDrawingCanvas()
+    this.images = this.images.filter(image => image.id !== 'drawing')
+    this.showDrawingMoreMenu = false
+    this.queueAutosave()
+  }
+
+  private clearDrawingCanvas() {
+    const canvas = this.drawingCanvas?.nativeElement
+    const ctx = canvas?.getContext('2d')
+    if (!canvas || !ctx) return
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    this.clearDrawingSelection()
+    this.pushDrawingHistory()
+    this.syncDrawingImage()
+  }
+
+  clearDrawingPage() {
+    this.clearDrawingCanvas()
+    this.showDrawingEraserMenu = false
+  }
+
+  exportDrawing() {
+    const canvas = this.drawingCanvas?.nativeElement
+    if (!canvas) return
+    const dataUrl = this.drawingDataUrl(true)
+    const link = document.createElement('a')
+    link.download = 'kept-drawing.png'
+    link.href = dataUrl
+    link.click()
+    this.showDrawingMoreMenu = false
+  }
+
+  private syncDrawingImage() {
+    const canvas = this.drawingCanvas?.nativeElement
+    if (!canvas) return
+    const dataUrl = this.drawingDataUrl()
+    const drawing = { id: 'drawing', dataUrl, name: `Drawing|bg:${this.drawingBackground}`, placement: 'top' as const }
+    const index = this.images.findIndex(image => image.id === 'drawing')
+    if (index >= 0) this.images[index] = drawing
+    else this.images = [drawing, ...this.images]
+  }
+
+  selectDrawingTool(tool: DrawingTool) {
+    if (tool !== 'select') this.clearDrawingSelection()
+    this.drawingTool = tool
+    this.showDrawingEraserMenu = false
+    if (tool === 'eraser') {
+      this.drawingOpenToolMenu = undefined
+      return
+    }
+    if (tool === 'select') this.drawingOpenToolMenu = undefined
+  }
+
+  toggleDrawingToolMenu(tool: 'pen' | 'marker' | 'highlighter', event: Event) {
+    event.stopPropagation()
+    this.selectDrawingTool(tool)
+    this.drawingOpenToolMenu = this.drawingOpenToolMenu === tool ? undefined : tool
+    this.showDrawingBackgroundMenu = false
+    this.showDrawingMoreMenu = false
+    this.showDrawingEraserMenu = false
+  }
+
+  setDrawingToolColor(tool: 'pen' | 'marker' | 'highlighter', color: string) {
+    this.drawingToolOptions[tool].color = color
+    this.drawingTool = tool
+    this.drawingOpenToolMenu = undefined
+  }
+
+  setDrawingToolSize(tool: 'pen' | 'marker' | 'highlighter', size: number) {
+    this.drawingToolOptions[tool].size = size
+    this.drawingTool = tool
+    this.drawingOpenToolMenu = undefined
+  }
+
+  drawingToolColor(tool: 'pen' | 'marker' | 'highlighter') {
+    return this.drawingToolOptions[tool].color
+  }
+
+  drawingToolSize(tool: 'pen' | 'marker' | 'highlighter') {
+    return this.drawingToolOptions[tool].size
+  }
+
+  toggleEraserMenu(event: Event) {
+    event.stopPropagation()
+    this.selectDrawingTool('eraser')
+    this.showDrawingEraserMenu = !this.showDrawingEraserMenu
+    this.drawingOpenToolMenu = undefined
+    this.showDrawingBackgroundMenu = false
+    this.showDrawingMoreMenu = false
+  }
+
+  setDrawingBackground(background: 'square' | 'dots' | 'rules' | 'none') {
+    this.drawingBackground = background
+    this.showDrawingBackgroundMenu = false
+    this.syncDrawingImage()
+    this.queueAutosave()
+  }
+
+  private drawingBackgroundFromImage(image?: NoteImageI) {
+    const match = image?.name?.match(/\|bg:(square|dots|rules|none)$/)
+    return (match?.[1] as 'square' | 'dots' | 'rules' | 'none' | undefined) || this.drawingBackground || 'none'
+  }
+
+  private drawStoredDrawingImage(ctx: CanvasRenderingContext2D, image: HTMLImageElement) {
+    const canvas = ctx.canvas
+    const temp = document.createElement('canvas')
+    temp.width = image.naturalWidth
+    temp.height = image.naturalHeight
+    const tempCtx = temp.getContext('2d')!
+    tempCtx.drawImage(image, 0, 0)
+    const imageData = tempCtx.getImageData(0, 0, temp.width, temp.height)
+    const data = imageData.data
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] > 248 && data[i + 1] > 248 && data[i + 2] > 248) data[i + 3] = 0
+    }
+    tempCtx.putImageData(imageData, 0, 0)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.drawImage(temp, 0, 0)
+  }
+
+  private drawingDataUrl(withWhiteBackground = false) {
+    const canvas = this.drawingCanvas!.nativeElement
+    if (!withWhiteBackground) return canvas.toDataURL('image/png')
+    const output = document.createElement('canvas')
+    output.width = canvas.width
+    output.height = canvas.height
+    const ctx = output.getContext('2d')!
+    ctx.fillStyle = '#fff'
+    ctx.fillRect(0, 0, output.width, output.height)
+    ctx.drawImage(canvas, 0, 0)
+    return output.toDataURL('image/png')
+  }
+
+  cboxDrag(event: DragEvent) {
+    this.moveCboxDragImage(event)
+    // Outdenting can take the pointer left of the row's drop target.
+    if (event.clientX !== 0 || event.clientY !== 0) {
+      this.applyCboxIndentFromDrag(event.clientX - this.cboxTouchStartX, event.clientY - this.cboxTouchStartY)
+    }
+  }
+
+  cboxDragOver(id: number, isDone: boolean, event: DragEvent) {
+    if (this.draggedCboxId === undefined) return
+    const draggedCb = this.checkBoxes.find(cb => cb.id === this.draggedCboxId)
+    if (!draggedCb || !this.cboxSectionMatches(draggedCb, isDone)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopPropagation()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    this.moveCboxDragImage(event)
+    if (this.applyCboxIndentFromDrag(event.clientX - this.cboxTouchStartX, event.clientY - this.cboxTouchStartY)) return
+    this.reorderCboxAround(id, isDone, event.clientY)
+  }
+
+  cboxTouchStart(id: number, isDone: boolean, event: TouchEvent) {
+    if (event.cancelable) event.preventDefault()
+    event.stopPropagation()
+    const touch = event.touches[0]
+    if (!touch) return
+    this.cboxTouchStartX = touch.clientX
+    this.cboxTouchStartY = touch.clientY
+    this.cboxTouchIsDone = isDone
+    this.cboxTouchDragging = false
+    this.cboxTouchIndentHandled = false
+    this.cboxDragOrderChanged = false
+    if (this.cboxTouchTimer) clearTimeout(this.cboxTouchTimer)
+    this.cboxTouchTimer = setTimeout(() => {
+      this.draggedCboxId = id
+      this.dragReadyCboxId = id
+      this.cboxTouchDragging = true
+      this.cboxTouchStartIndent = this.checkboxIndentLevel(this.checkBoxes.find(cb => cb.id === id))
+      const row = document.querySelector<HTMLElement>(`[data-cbox-row-id="${id}"]`)
+      if (row) {
+        this.createCboxDragImage(row, this.cboxTouchStartX, this.cboxTouchStartY)
+        this.moveCboxDragImageToPoint(this.cboxTouchStartX, this.cboxTouchStartY)
+      }
+      try { (navigator as any).vibrate?.(10) } catch {}
+    }, 240)
+  }
+
+  cboxTouchMove(event: TouchEvent) {
+    const touch = event.touches[0]
+    if (!touch) return
+    const rawDx = touch.clientX - this.cboxTouchStartX
+    const rawDy = touch.clientY - this.cboxTouchStartY
+    const dx = Math.abs(rawDx)
+    const dy = Math.abs(rawDy)
+
+    if (!this.cboxTouchDragging) {
+      if ((dx > 14 || dy > 14) && this.cboxTouchTimer) {
+        clearTimeout(this.cboxTouchTimer)
+        this.cboxTouchTimer = undefined
+      }
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    this.moveCboxDragImageToPoint(touch.clientX, touch.clientY)
+    if (this.applyCboxIndentFromDrag(rawDx, rawDy)) return
+    const row = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('[data-cbox-row-id]') as HTMLElement | null
+    const id = Number(row?.dataset['cboxRowId'])
+    if (Number.isNaN(id)) return
+    this.reorderCboxAround(id, this.cboxTouchIsDone, touch.clientY)
+  }
+
+  cboxTouchEnd() {
+    if (this.cboxTouchTimer) {
+      clearTimeout(this.cboxTouchTimer)
+      this.cboxTouchTimer = undefined
+    }
+    if (this.cboxTouchDragging) this.persistCboxDragOrder()
+    this.clearCboxDragState()
+    this.cboxTouchDragging = false
+  }
+
+  private reorderCboxAround(id: number, isDone: boolean, clientY: number) {
+    if (this.draggedCboxId === undefined) return
+    const draggedCb = this.checkBoxes.find(cb => cb.id === this.draggedCboxId)
+    if (!draggedCb || !this.cboxSectionMatches(draggedCb, isDone)) return
+    if (id === this.draggedCboxId) return
+
+    const row = document.querySelector<HTMLElement>(`[data-cbox-row-id="${id}"]`)
+    if (!row) return
+    const rect = row.getBoundingClientRect()
+    const placement: 'before' | 'after' = clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+
+    const fromIdx = this.checkBoxes.indexOf(draggedCb)
+    const targetIdx = this.checkBoxes.findIndex(cb => cb.id === id)
+    if (fromIdx < 0 || targetIdx < 0) return
+
+    // Cheap early-out: figure out the destination index without touching the
+    // array, and bail if it'd be a no-op. dragover fires dozens of times per
+    // second even when the cursor hasn't crossed a row midpoint, so doing
+    // the splice + Angular change detection + FLIP-style row animations on
+    // every event is what was causing the lag.
+    const insertBeforeIdx = placement === 'after' ? targetIdx + 1 : targetIdx
+    const adjustedInsertIdx = insertBeforeIdx > fromIdx ? insertBeforeIdx - 1 : insertBeforeIdx
+    if (adjustedInsertIdx === fromIdx) return
+
+    const previousRects = this.getCboxRowRects(isDone)
+    const [moved] = this.checkBoxes.splice(fromIdx, 1)
+    this.checkBoxes.splice(adjustedInsertIdx, 0, moved)
+    this.checkBoxes = normalizeIndentLevels(this.checkBoxes)
+    this.checkBoxes = [...this.checkBoxes]
+    this.animateCboxRows(previousRects, this.draggedCboxId)
+    this.cboxDragOrderChanged = true
+  }
+
+  cboxDrop(id: number, isDone: boolean, event: DragEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (this.draggedCboxId === undefined) return
+    const draggedCb = this.checkBoxes.find(cb => cb.id === this.draggedCboxId)
+    if (!draggedCb || !this.cboxSectionMatches(draggedCb, isDone)) return
+    this.persistCboxDragOrder()
+    this.clearCboxDragState()
+  }
+
+  cboxDragEnd() {
+    this.persistCboxDragOrder()
+    this.clearCboxDragState()
+  }
+
+  private persistCboxDragOrder() {
+    if (!this.cboxDragOrderChanged) return
+    this.pushCboxHistorySnapshot()
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.queueAutosave()
+  }
+
+  private clearCboxDragState() {
+    if (this.cboxTouchTimer) {
+      clearTimeout(this.cboxTouchTimer)
+      this.cboxTouchTimer = undefined
+    }
+    this.draggedCboxId = undefined
+    this.dragReadyCboxId = undefined
+    this.cboxDragOrderChanged = false
+    this.cboxTouchIndentHandled = false
+    this.cboxTouchStartIndent = 0
+    this.cboxDragImage?.remove()
+    this.cboxDragImage = undefined
+  }
+
+  private createCboxDragImage(row: HTMLElement, clientX: number, clientY: number) {
+    this.cboxDragImage?.remove()
+    const rect = row.getBoundingClientRect()
+    const dragImage = row.cloneNode(true) as HTMLElement
+    dragImage.classList.add('cbox-drag-image')
+    dragImage.removeAttribute('data-cbox-row-id')
+    dragImage.style.width = `${rect.width}px`
+    dragImage.style.transform = `translate(${rect.left}px, ${rect.top}px)`
+    document.body.appendChild(dragImage)
+    this.cboxDragImage = dragImage
+    this.cboxDragImageOffset = { x: clientX - rect.left, y: clientY - rect.top }
+  }
+
+  private moveCboxDragImage(event: DragEvent) {
+    if (!this.cboxDragImage || (event.clientX === 0 && event.clientY === 0)) return
+    this.moveCboxDragImageToPoint(event.clientX, event.clientY)
+  }
+
+  private moveCboxDragImageToPoint(clientX: number, clientY: number) {
+    if (!this.cboxDragImage) return
+    this.cboxDragImage.style.transform = `translate(${clientX - this.cboxDragImageOffset.x}px, ${clientY - this.cboxDragImageOffset.y}px)`
+  }
+
+  private getTransparentDragImage() {
+    const canvas = document.createElement('canvas')
+    canvas.width = 1
+    canvas.height = 1
+    return canvas
+  }
+
+  private getCboxRowRects(isDone: boolean) {
+    const rects = new Map<number, DOMRect>()
+    document.querySelectorAll<HTMLElement>('[data-cbox-row-id]').forEach(row => {
+      const id = Number(row.dataset['cboxRowId'])
+      const cb = this.checkBoxes.find(item => item.id === id)
+      if (cb && this.cboxSectionMatches(cb, isDone)) rects.set(id, row.getBoundingClientRect())
+    })
+    return rects
+  }
+
+  private animateCboxRows(previousRects: Map<number, DOMRect>, draggedId: number) {
+    this.cd.detectChanges()
+    requestAnimationFrame(() => {
+      document.querySelectorAll<HTMLElement>('[data-cbox-row-id]').forEach(row => {
+        const id = Number(row.dataset['cboxRowId'])
+        if (id === draggedId) return
+
+        const previousRect = previousRects.get(id)
+        if (!previousRect) return
+
+        const nextRect = row.getBoundingClientRect()
+        const deltaY = previousRect.top - nextRect.top
+        if (!deltaY) return
+
+        // Cancel any in-flight FLIP animation on this row so successive
+        // reorders during a fast drag don't queue overlapping animations
+        // (which is what made the drag feel laggy).
+        for (const anim of row.getAnimations()) {
+          if ((anim as any).id === 'cbox-flip') anim.cancel()
+        }
+        const animation = row.animate(
+          [
+            { transform: `translateY(${deltaY}px)` },
+            { transform: 'translateY(0)' }
+          ],
+          {
+            duration: 140,
+            easing: 'cubic-bezier(0.2, 0, 0, 1)'
+          }
+        )
+        ;(animation as any).id = 'cbox-flip'
+      })
+    })
+  }
+
+  cboxTools(id: number) {
+    let actions = {
+      remove: () => {
+        this.syncCboxDomIntoModel()
+        const i = this.checkBoxes.findIndex(x => x.id === id)
+        if (i < 0) return
+        this.checkBoxes.splice(i, 1)
+        this.cboxSuggestionEligibleIds.delete(id)
+        this.cboxSuggestionDraftValues.delete(id)
+        this.dismissedCboxSuggestionIds.delete(id)
+        if (this.activeCboxSuggestionRowId === id) this.activeCboxSuggestionRowId = undefined
+        this.inputLength.next({ ...this.inputLength.value, cb: this.checkBoxes.length })
+        this.pushCboxHistorySnapshot()
+        this.queueAutosave()
+      },
+      check: () => {
+        if (!this.toggleCboxDoneWithChildren(id)) return
+        this.pushCboxHistorySnapshot()
+        this.queueAutosave()
+      },
+      update: (el: HTMLDivElement) => {
+        const i = this.checkBoxes.findIndex(x => x.id === id)
+        if (i < 0) return
+        let elValue = el?.innerHTML
+        this.checkBoxes[i].data = elValue
+        this.queueAutosave()
+      }
+    }
+    return actions
+  }
+
+  toggleCboxDone(id: number, event?: Event) {
+    event?.preventDefault()
+    event?.stopPropagation()
+    if (event?.type === 'touchend') {
+      this.lastCboxTouchToggleAt = Date.now()
+    } else if (Date.now() - this.lastCboxTouchToggleAt < 700) {
+      return
+    }
+    if (!this.checkBoxes.some(cb => cb.id === id)) return
+    this.cboxTools(id).check()
+    this.noteToEdit.checkBoxes = this.checkBoxes
+    this.cd.detectChanges()
+  }
+
+  //? isEditing  -----------------------------------------------------------
+
+  innerData(note: NoteI) {
+    this.notePhClick()
+    this.noteTitle.nativeElement.innerHTML = sanitizeNoteHtml(note.noteTitle)
+    this.images = (note.images || []).map(image => ({ ...image, dataUrl: this.auth.authenticatedImageUrl(image.dataUrl) }))
+    this.attachments = note.attachments || []
+    this.isDrawingNote = this.images.some(image => image.id === 'drawing')
+    this.notePin.nativeElement.dataset['pinned'] = String(note.pinned)
+    this.applyBackgroundImage('')
+    // applyBackgroundImage already sets this.hasBackgroundImage with the
+    // correct logic (treats empty `url("")` as "no image"); do not override it.
+    this.noteMain.nativeElement.style.backgroundColor = note.bgColor || '#ffffff'
+    this.noteMain.nativeElement.style.borderColor = 'transparent'
+    this.updateTextColor(note.bgColor || '#ffffff')
+    this.cboxSuggestionEligibleIds.clear()
+    this.cboxSuggestionDraftValues.clear()
+    this.dismissedCboxSuggestionIds.clear()
+    this.activeCboxSuggestionRowId = undefined
+    this.checkBoxes = this.normalizeCheckBoxes(note.checkBoxes || [])
+    this.loadCompletedChecklistCollapseState(note)
+    this.resetCboxHistory()
+    // Hybrid: latch BEFORE flipping isCbox so the noteBody ViewChild is
+    // present after change detection (otherwise the body assignment below
+    // would silently no-op when loading a hybrid note from a checklist-only
+    // previous editor state).
+    this.isHybridNote = !!note.isCbox && this.hasMeaningfulBody(note.noteBody)
+    this.isCbox.next(note.isCbox)
+    this.isArchived = note.archived
+    this.isTrashed = note.trashed
+    this.binderName = note.binder || ''
+    this.saveBaselineSnapshot = this.noteSaveSnapshot(note)
+    this.lastExternalUpdateSnapshot = JSON.stringify([note.updatedAt, this.noteSaveSnapshot(note)])
+    //
+    this.inputLength.next({ title: note.noteTitle.length, body: (note.noteBody ? note.noteBody?.length : 0) + this.images.length + this.attachments.length, cb: note.checkBoxes?.length! })
+    note.labels.forEach(noteLabel => {
+      let label = this.labels.find(x => x.name === noteLabel.name)
+      if (label) label.added = noteLabel.added
+      // A note URL can open before the shared Label catalog has loaded.
+      // Keep the note's own Labels rather than saving an empty selection.
+      else this.labels.push({ ...noteLabel })
+    })
+    this.labelsDirty = false
+    // Force the templates to materialize before we touch the body element.
+    this.cd.detectChanges()
+    this.markdownSource = note.contentFormat === 'markdown' && typeof note.markdownSource === 'string'
+      ? note.markdownSource : htmlToMarkdown(note.noteBody || '')
+    if (this.noteBody) this.noteBody.nativeElement.innerHTML = sanitizeNoteHtml(this.decorateLinksForEditor(markdownToHtml(this.markdownSource)))
+    this.hydrateEditorLinkPreviews()
+    this.hydrateInlineImageButtons()
+    if (this.isDrawingNote) this.setupDrawingCanvas()
+  }
+
+  private currentMarkdownSource() {
+    if (this.markdownSourceMode) return this.markdownSource
+    return htmlToMarkdown(this.cleanEditorBodyForSave(this.noteBody?.nativeElement.innerHTML || ''))
+  }
+
+  onMarkdownSourceInput(value: string) {
+    this.markdownSource = value
+    this.updateInputLength({ body: value.length })
+    this.queueAutosave()
+  }
+
+  toggleMarkdownSourceMode() {
+    if (this.isCbox.value) return
+    if (this.markdownSourceMode) {
+      if (this.noteBody) this.noteBody.nativeElement.innerHTML = markdownToHtml(this.markdownSource)
+      this.markdownSourceMode = false
+      setTimeout(() => this.noteBody?.nativeElement.focus(), 0)
+    } else {
+      this.markdownSource = this.currentMarkdownSource()
+      this.markdownSourceMode = true
+      setTimeout(() => this.markdownEditor?.nativeElement.focus(), 0)
+    }
+    this.cd.detectChanges()
+  }
+
+  @HostListener('document:keydown', ['$event'])
+  markdownModeShortcut(event: KeyboardEvent) {
+    if (event.key.toLowerCase() !== 'a' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    const target = event.target as HTMLElement | null
+    if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+    if (!this.noteMain?.nativeElement || this.noteMain.nativeElement.offsetParent === null || this.isCbox.value) return
+    event.preventDefault()
+    this.toggleMarkdownSourceMode()
+  }
+
+  //? tooltip  -----------------------------------------------------------
+
+  openTooltip(button: HTMLElement, tooltipEl: HTMLDivElement) {
+    this.Shared.createTooltip(button, tooltipEl)
+  }
+
+  async openCollaboratorMenu(button: HTMLDivElement, tooltipEl: HTMLDivElement) {
+    this.collaboratorError = ''
+    if (this.isEditing && this.noteToEdit.id) {
+      this.Shared.note.id = this.noteToEdit.id
+      this.collaboratorUsers = []
+      this.selectedCollaboratorIds = (this.noteToEdit.collaborators || []).map(user => user.id)
+    } else if (!navigator.onLine) {
+      this.collaboratorUsers = []
+      this.collaboratorError = 'Connect to the server before choosing collaborators for a new note.'
+    }
+    this.Shared.createTooltip(button, tooltipEl)
+
+    try {
+      if (navigator.onLine) this.collaboratorUsers = await this.Shared.note.db.listShareUsers()
+      if (this.isEditing && this.canManageCollaborators()) {
+        const collaborators = await this.notesService.getCollaborators(this.noteToEdit.id!)
+        this.selectedCollaboratorIds = collaborators.map(user => user.id)
+      }
+    } catch (error: any) {
+      this.collaboratorError = error?.error?.error || 'Could not load sharing options.'
+    }
+  }
+
+  canManageCollaborators() {
+    return !!this.noteToEdit.id && this.noteToEdit.ownerUserId === this.auth.currentUser?.id
+  }
+
+  canSelectDraftCollaborators() {
+    return !this.isEditing
+  }
+
+  canSelectCollaborator(userId: number) {
+    if (this.isNoteOwner(userId)) return false
+    return this.canSelectDraftCollaborators() || this.canManageCollaborators()
+  }
+
+  isNoteOwner(userId: number) {
+    return !!this.noteToEdit.ownerUserId && this.noteToEdit.ownerUserId === userId
+  }
+
+  isCollaboratorSelected(userId: number) {
+    return this.selectedCollaboratorIds.includes(userId)
+  }
+
+  async toggleCollaborator(userId: number) {
+    if (!this.canSelectCollaborator(userId)) return
+    const previousSelectedIds = [...this.selectedCollaboratorIds]
+    if (this.isCollaboratorSelected(userId)) {
+      this.selectedCollaboratorIds = this.selectedCollaboratorIds.filter(id => id !== userId)
+    } else {
+      this.selectedCollaboratorIds = [...this.selectedCollaboratorIds, userId]
+    }
+
+    if (this.canSelectDraftCollaborators()) return
+
+    this.isSavingCollaborators = true
+    this.collaboratorError = ''
+    try {
+      const collaborators = await this.notesService.updateCollaborators(this.noteToEdit.id!, this.selectedCollaboratorIds)
+      this.noteToEdit.collaborators = collaborators
+      this.selectedCollaboratorIds = collaborators.map(user => user.id)
+    } catch (error: any) {
+      this.selectedCollaboratorIds = previousSelectedIds
+      this.collaboratorError = error?.error?.error || 'Could not update collaborators.'
+    } finally {
+      this.isSavingCollaborators = false
+    }
+  }
+
+  async saveCollaborators(tooltipEl: HTMLDivElement) {
+    if (this.canSelectDraftCollaborators()) {
+      this.Shared.closeTooltip(tooltipEl)
+      return
+    }
+    if (!this.canManageCollaborators()) return
+    this.isSavingCollaborators = true
+    this.collaboratorError = ''
+    try {
+      const collaborators = await this.notesService.updateCollaborators(this.noteToEdit.id!, this.selectedCollaboratorIds)
+      this.noteToEdit.collaborators = collaborators
+      this.Shared.closeTooltip(tooltipEl)
+    } catch (error: any) {
+      this.collaboratorError = error?.error?.error || 'Could not save collaborators.'
+    } finally {
+      this.isSavingCollaborators = false
+    }
+  }
+
+  private async applyPendingCollaborators(noteId: number, userIds: number[]) {
+    const ids = [...new Set(userIds.filter(id => Number.isFinite(id) && id > 0))]
+    if (!ids.length) return
+    if (noteId <= 0) {
+      this.collaboratorError = 'Note saved locally, but collaborators will need to be added after it syncs.'
+      this.showCollaboratorSaveWarning()
+      return
+    }
+    if (!navigator.onLine) {
+      this.collaboratorError = 'Note saved, but collaborators could not be added while offline.'
+      this.showCollaboratorSaveWarning()
+      return
+    }
+    this.isSavingCollaborators = true
+    this.collaboratorError = ''
+    try {
+      await this.notesService.updateCollaborators(noteId, ids)
+      this.selectedCollaboratorIds = []
+    } catch (error: any) {
+      this.collaboratorError = error?.error?.error || 'Note saved, but collaborators could not be added.'
+      this.showCollaboratorSaveWarning()
+    } finally {
+      this.isSavingCollaborators = false
+    }
+  }
+
+  private showCollaboratorSaveWarning() {
+    try {
+      Snackbar?.show({
+        pos: 'bottom-left',
+        text: this.collaboratorError || 'Note saved, but collaborators could not be added.',
+        duration: 5000
+      })
+    } catch {}
+  }
+
+  async addLabelFromMenu(input: HTMLInputElement) {
+    if (this.inheritsSharedOrganization('labels')) return
+    const name = input.value.trim()
+    if (!name) return
+
+    const existing = this.labels.find(label => label.name.toLowerCase() === name.toLowerCase())
+    if (existing) {
+      existing.added = true
+      this.labelsDirty = true
+      input.value = ''
+      this.labelMenuError = ''
+      return
+    }
+
+    try {
+      const id = await this.Shared.label.db.add({ name })
+      this.labels = [{ id, name, added: true }, ...this.labels]
+      this.labelsDirty = true
+      input.value = ''
+      this.labelMenuError = ''
+    } catch (error: any) {
+      const matchingLabel = this.Shared.label.list.find(label => label.name.toLowerCase() === name.toLowerCase())
+      if (matchingLabel) {
+        this.labels = [{ ...matchingLabel, added: true }, ...this.labels]
+        this.labelsDirty = true
+        input.value = ''
+        this.labelMenuError = ''
+        return
+      }
+      this.labelMenuError = error?.status === 409 ? 'Label already exists' : 'Could not create label'
+    }
+  }
+
+  toggleLabel(label: LabelI) {
+    if (this.inheritsSharedOrganization('labels')) return
+    label.added = !label.added
+    this.labelsDirty = true
+    this.queueAutosave()
+  }
+
+  async addBinderFromMenu(input: HTMLInputElement) {
+    if (this.inheritsSharedOrganization('binders')) return
+    const name = input.value.trim()
+    if (!name) return
+    const existing = this.Shared.binder.list.find(binder => binder.name.toLowerCase() === name.toLowerCase())
+    if (existing) {
+      this.binderName = existing.name
+      input.value = ''
+      this.binderMenuError = ''
+      this.queueAutosave()
+      return
+    }
+    try {
+      await this.Shared.binder.db.add(name)
+      this.binderName = name
+      input.value = ''
+      this.binderMenuError = ''
+      this.queueAutosave()
+    } catch {
+      this.binderMenuError = 'Could not create binder'
+    }
+  }
+
+  selectBinder(name: string, tooltipEl?: HTMLDivElement) {
+    if (this.inheritsSharedOrganization('binders')) return
+    this.binderName = String(name || '').trim()
+    this.queueAutosave()
+    if (tooltipEl) this.Shared.closeTooltip(tooltipEl)
+  }
+
+  isSelectedBinder(name: string) {
+    return (this.binderName || '') === (name || '')
+  }
+
+  sharedOrganizationHint(kind: 'labels' | 'binders') {
+    const note = this.noteToEdit;
+    if (!note?.ownerUserId || note.ownerUserId === this.auth.currentUser?.id) return '';
+    return this.inheritsSharedOrganization(kind)
+      ? `Using the owner's ${kind === 'binders' ? 'binder' : 'labels'}. You can change this in Settings.`
+      : 'Only changes your organization.';
+  }
+
+  inheritsSharedOrganization(kind: 'labels' | 'binders') {
+    const note = this.noteToEdit;
+    return !!note?.ownerUserId && note.ownerUserId !== this.auth.currentUser?.id &&
+      (kind === 'labels' ? this.auth.currentUser?.inheritSharedLabels !== false : this.auth.currentUser?.inheritSharedBinders !== false);
+  }
+
+  isSharedNoteForCurrentUser() {
+    const ownerId = this.noteToEdit?.ownerUserId
+    const me = this.auth.currentUser?.id
+    return !!(ownerId && me && ownerId !== me)
+  }
+
+  moreMenu(tooltipEl: HTMLDivElement) {
+    let actions = {
+      trash: () => {
+        if (this.isEditing) {
+          // Shared note: the viewer is not the owner. They can't delete it,
+          // only unshare themselves from it. Mirrors notes.component's
+          // moreMenu.trash so behaviour is consistent across views.
+          if (this.isSharedNoteForCurrentUser()) {
+            const ownerName = this.noteToEdit.ownerDisplayName || this.noteToEdit.ownerUsername || 'the owner'
+            const ok = confirm(`This note belongs to ${ownerName}, so you can't delete it — only the owner can. Remove yourself from this shared note instead?`)
+            if (!ok) return
+            const userId = this.auth.currentUser?.id
+            this.notesService.delete(this.noteToEdit.id!)
+            this.Shared.snackBar({ action: 'left shared note', opposite: 'rejoined' }, { rejoin: true, userId } as any, this.noteToEdit.id!)
+            this.Shared.closeModal.next(true)
+            return
+          }
+          this.Shared.note.db.trash()
+          this.Shared.closeModal.next(true)
+        } else {
+          this.isTrashed = true
+          this.saveNote()
+        }
+      },
+      clone: async () => {
+        if (this.isEditing && this.noteToEdit.id) {
+          const saved = await this.saveNote()
+          if (saved === false) return
+          await this.notesService.clone(this.noteToEdit.id)
+          return
+        }
+        await this.saveNote()
+      },
+      toggleCbox: () => {
+        this.toggleCbox()
+      }
+    }
+    this.Shared.closeTooltip(tooltipEl)
+    return actions
+  }
+
+  async lockCurrentNote(tooltipEl?: HTMLDivElement) {
+    tooltipEl && this.Shared.closeTooltip(tooltipEl)
+    if (!this.isEditing || !this.noteToEdit?.id || this.isSharedNoteForCurrentUser()) return
+    const fields = await this.noteLock.createLockFields()
+    if (!fields) return
+    await this.notesService.updateKey(fields, this.noteToEdit.id)
+    Object.assign(this.noteToEdit, fields)
+    this.noteLock.markUnlocked(this.noteToEdit)
+    this.saveBaselineSnapshot = this.noteSaveSnapshot(this.noteToEdit)
+  }
+
+  async changeCurrentNoteLock(tooltipEl?: HTMLDivElement) {
+    tooltipEl && this.Shared.closeTooltip(tooltipEl)
+    if (!this.isEditing || !this.noteToEdit?.id || this.isSharedNoteForCurrentUser()) return
+    const fields = await this.noteLock.changeLockFields(this.noteToEdit)
+    if (!fields) return
+    await this.notesService.updateKey(fields, this.noteToEdit.id)
+    Object.assign(this.noteToEdit, fields)
+    this.noteLock.markUnlocked(this.noteToEdit)
+    this.saveBaselineSnapshot = this.noteSaveSnapshot(this.noteToEdit)
+  }
+
+  async removeCurrentNoteLock(tooltipEl?: HTMLDivElement) {
+    tooltipEl && this.Shared.closeTooltip(tooltipEl)
+    if (!this.isEditing || !this.noteToEdit?.id || this.isSharedNoteForCurrentUser()) return
+    const fields = await this.noteLock.removeLockFields(this.noteToEdit)
+    if (!fields) return
+    await this.notesService.updateKey(fields, this.noteToEdit.id)
+    Object.assign(this.noteToEdit, fields)
+    this.saveBaselineSnapshot = this.noteSaveSnapshot(this.noteToEdit)
+  }
+
+  relockCurrentNote(tooltipEl?: HTMLDivElement) {
+    tooltipEl && this.Shared.closeTooltip(tooltipEl)
+    if (!this.isEditing || !this.noteToEdit?.id || !this.noteToEdit.locked) return
+    this.noteLock.clearUnlocked(this.noteToEdit)
+    this.Shared.closeModal.next(true)
+  }
+
+  private currentRouteLabel() {
+    const path = this.router.url.split('?')[0].split('#')[0]
+    const match = path.match(/\/label\/([^/]+)/)
+    if (!match) return ''
+    try {
+      return decodeURIComponent(match[1])
+    } catch {
+      return match[1]
+    }
+  }
+
+  /**
+   * Ticks the label of the page the note is being written on, the way binders
+   * are already prefilled from the route just below. Without it a note created
+   * from a label page is saved with no label at all, so it leaves the view the
+   * moment it is saved.
+   *
+   * Names are compared exactly, because that is how the notes pipe decides
+   * which notes a label page shows; a looser match here could tick a label
+   * that still leaves the note filtered out.
+   */
+  private preselectRouteLabel() {
+    const name = this.currentRouteLabel()
+    if (!name) return
+    const label = this.labels.find(candidate => candidate.name === name)
+    if (label) label.added = true
+  }
+
+  private currentRouteBinder() {
+    const path = this.router.url.split('?')[0].split('#')[0]
+    const match = path.match(/\/binder\/([^/]+)/)
+    if (!match) return ''
+    try {
+      return decodeURIComponent(match[1])
+    } catch {
+      return match[1]
+    }
+  }
+
+  colorMenu = {
+    bgColor: (data: bgColors) => {
+      this.noteMain.nativeElement.style.backgroundColor = data
+      this.noteMain.nativeElement.style.borderColor = data
+      this.updateTextColor(data)
+      this.queueAutosave()
+    },
+    bgImage: (data: bgImages) => {
+      this.applyBackgroundImage(data)
+      this.queueAutosave()
+    }
+  }
+
+  private applyBackgroundImage(data: string) {
+    const bgImage = data ? (data.startsWith('url(') ? data : `url(${data})`) : ''
+    this.noteContainer.nativeElement.style.backgroundImage = bgImage
+    this.noteMain.nativeElement.style.backgroundImage = bgImage
+    this.hasBackgroundImage = !!bgImage && bgImage !== 'url("")'
+    this.updateTextColor(this.noteMain.nativeElement.style.backgroundColor)
+  }
+
+  private updateTextColor(color: string) {
+    const surface = this.noteMain.nativeElement
+    // Match the card foreground, including the existing image-background policy.
+    const ink = this.hasBackgroundImage || this.isLightColor(color) ? '#202124' : '#e8eaed'
+    if (color || this.hasBackgroundImage) {
+      surface.setAttribute('data-note-ink', ink)
+      surface.style.setProperty('--note-ink', ink)
+    } else {
+      surface.removeAttribute('data-note-ink')
+      surface.style.removeProperty('--note-ink')
+    }
+    if (this.hasBackgroundImage || this.isLightColor(color)) {
+      this.noteMain.nativeElement.style.color = '#202124'
+    } else if (color) {
+      this.noteMain.nativeElement.style.color = '#e8eaed'
+    } else {
+      this.noteMain.nativeElement.style.color = ''
+    }
+  }
+
+  isLightColor(color: string) {
+    const rgb = this.parseColor(color)
+    if (!rgb) return false
+    return ((rgb.r * 299) + (rgb.g * 587) + (rgb.b * 114)) / 1000 > 160
+  }
+
+  private parseColor(color: string) {
+    if (!color) return null
+    const hex = color.trim().match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i)
+    if (hex) {
+      return {
+        r: parseInt(hex[1], 16),
+        g: parseInt(hex[2], 16),
+        b: parseInt(hex[3], 16)
+      }
+    }
+
+    const rgb = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i)
+    if (!rgb) return null
+    return {
+      r: Number(rgb[1]),
+      g: Number(rgb[2]),
+      b: Number(rgb[3])
+    }
+  }
+
+  //?  -----------------------------------------------------------
+  // cuz we don't have the spread operator in the template, we need to do this : 
+  updateInputLength(type: InputLengthI) {
+    if (type.title != undefined) this.inputLength.next({ ...this.inputLength.value, title: type.title })
+    if (type.body != undefined) this.inputLength.next({ ...this.inputLength.value, body: type.body })
+  }
+
+
+  //? -----------------------------------------------------------
+
+  saveNoteSubscription?: Subscription
+  ngAfterViewInit() {
+    this.autoSaveSubscription = this.autoSaveSubject.pipe(debounceTime(550)).subscribe(this.flushAutosave)
+    document.addEventListener('visibilitychange', this.visibilitySave)
+    window.addEventListener('pagehide', this.flushAutosave)
+    void this.bindBackgroundSave()
+    document.addEventListener('selectionchange', this.textSelectionChangeHandler)
+    window.addEventListener('resize', this.textSelectionRepositionHandler)
+    document.addEventListener('scroll', this.textSelectionRepositionHandler, true)
+    this.mobileComposerSubscription = this.Shared.openMobileComposer.subscribe(open => {
+      if (open) this.openMobileComposer()
+    })
+    this.widgetCreateSubscription = this.Shared.widgetCreateRequested.subscribe(request => {
+      this.openWidgetComposer(request)
+    })
+    this.closeMobileComposerSubscription = this.Shared.closeMobileComposer.subscribe(close => {
+      if (close && this.mobileComposeMode && !this.isEditing) this.mobileBack()
+    })
+    if (this.isEditing) { this.saveNoteSubscription = this.Shared.saveNote.subscribe(x => { if (x) this.saveNote() }) }
+    if (this.isEditing && this.noteToEdit.id) {
+      this.notesService.joinNote(this.noteToEdit.id);
+      this.coEditSubscription = this.notesService.activeEditors$.subscribe(data => {
+        if (data && data.noteId === this.noteToEdit.id) {
+          this.activeEditors = (data.editors || []).filter((e: any) => e.id !== this.auth.currentUser?.id);
+        }
+      });
+      this.notesListSubscription = this.notesService.notesList$.subscribe(notes => {
+        if (!notes) return;
+        const updatedNote = notes.find(n => n.id === this.noteToEdit.id);
+        if (updatedNote && updatedNote.lastEditorUserId !== this.auth.currentUser?.id) {
+          this.applyExternalUpdate(updatedNote);
+        }
+      });
+    }
+    //? ----------------------------------------------------------------
+    this.isCbox.subscribe(value => {
+      this.updateCheckboxMenuLabel()
+    })
+    //? ----------------------------------------------------------------
+    this.inputLength.subscribe(x => {
+      if ((x.title) || (x.body) || (x.cb)) {
+        this.moreMenuEls.delete.disabled = false
+        this.moreMenuEls.copy.disabled = false
+      } else {
+        this.moreMenuEls.delete.disabled = true
+        this.moreMenuEls.copy.disabled = true
+      }
+    })
+    if (this.isEditing) {
+      this.innerData(this.noteToEdit)
+    }
+    if (this.autoOpenImagePicker) {
+      setTimeout(() => this.openImagePicker(), 0)
+    }
+  }
+
+  ngOnInit(): void {
+    if (this.isEditing && this.noteToEdit) {
+      this.updateLastEditedTime();
+      if (shouldUseFullscreenNoteEditor()) {
+        this.mobileComposeMode = true;
+        this.lockBodyScroll();
+      }
+    }
+    this.bindKeyboardOffset();
+    this.preferencesSubscription = this.preferences.preferences$.subscribe(() => {
+      this.updateLastEditedTime();
+      this.destroyTimePicker();
+      this.decorateCurrentBodyLinks();
+      this.cd.detectChanges();
+    });
+  }
+
+  // Prevent the document body from rubber-banding/scrolling underneath the
+  // mobile fullscreen compose modal — without this, scrolling the editor
+  // content can hand touch events off to the body and cause the underlying
+  // notes grid to peek-and-bounce behind the open editor.
+  private bodyScrollLocked = false;
+  private lockedBodyScrollY = 0;
+  private lockBodyScroll() {
+    if (this.bodyScrollLocked) return;
+    this.bodyScrollLocked = true;
+    this.lockedBodyScrollY = window.scrollY || window.pageYOffset || 0;
+    document.body.style.top = `-${this.lockedBodyScrollY}px`;
+    document.body.classList.add('kept-mobile-compose-open');
+  }
+  private unlockBodyScroll() {
+    if (!this.bodyScrollLocked) return;
+    const scrollY = this.lockedBodyScrollY;
+    this.bodyScrollLocked = false;
+    document.body.classList.remove('kept-mobile-compose-open');
+    document.body.style.top = '';
+    window.scrollTo(0, scrollY);
+    this.lockedBodyScrollY = 0;
+  }
+
+  // Keep the toolbar above the keyboard and dialogs within the visible area.
+  private viewportListener?: () => void;
+  private bindKeyboardOffset() {
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if (!vv) return;
+    const update = () => {
+      const offset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      document.documentElement.style.setProperty('--keyboard-offset', `${offset}px`);
+      this.hostElement.nativeElement.style.setProperty('--kept-viewport-height', `${vv.height}px`);
+      this.hostElement.nativeElement.style.setProperty('--kept-viewport-offset-top', `${vv.offsetTop}px`);
+    };
+    this.viewportListener = update;
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
+  }
+
+  private unbindKeyboardOffset() {
+    const vv = (window as any).visualViewport as VisualViewport | undefined;
+    if (!vv || !this.viewportListener) return;
+    vv.removeEventListener('resize', this.viewportListener);
+    vv.removeEventListener('scroll', this.viewportListener);
+    document.documentElement.style.removeProperty('--keyboard-offset');
+    this.hostElement.nativeElement.style.removeProperty('--kept-viewport-height');
+    this.hostElement.nativeElement.style.removeProperty('--kept-viewport-offset-top');
+    this.viewportListener = undefined;
+  }
+
+  private updateLastEditedTime() {
+    if (!this.noteToEdit.updatedAt) {
+      this.lastEditedTime = 'just now';
+      return;
+    }
+    const date = new Date(this.noteToEdit.updatedAt);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    
+    let timeStr = '';
+    if (isToday) {
+      timeStr = date.toLocaleTimeString([], {
+        hour: this.preferences.value.useTwentyFourHourTime ? '2-digit' : 'numeric',
+        minute: '2-digit',
+        hour12: this.preferences.value.useTwentyFourHourTime ? false : undefined
+      });
+    } else {
+      timeStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    }
+
+    if (this.noteToEdit.lastEditorUserId && this.noteToEdit.lastEditorUserId !== this.auth.currentUser?.id) {
+      this.lastEditedTime = `Edited ${timeStr}, by ${this.noteToEdit.lastEditorDisplayName}`;
+    } else {
+      this.lastEditedTime = `Edited ${timeStr}`;
+    }
+  }
+
+  ngOnDestroy() {
+    this.destroyed = true;
+    this.clearComposerDraft();
+    document.removeEventListener('visibilitychange', this.visibilitySave)
+    window.removeEventListener('pagehide', this.flushAutosave)
+    for (const handle of this.backgroundSaveHandles) void handle.remove()
+    this.backgroundSaveHandles = []
+    this.editorPreviewGeneration++;
+    if (this.editorLinkDecorationFrame) {
+      cancelAnimationFrame(this.editorLinkDecorationFrame);
+      this.editorLinkDecorationFrame = undefined;
+    }
+    this.saveNoteSubscription?.unsubscribe();
+    if (this.isEditing && this.noteToEdit.id) {
+      this.notesService.leaveNote(this.noteToEdit.id);
+    }
+    this.coEditSubscription?.unsubscribe();
+    this.notesListSubscription?.unsubscribe();
+    this.autoSaveSubscription?.unsubscribe();
+    this.mobileComposerSubscription?.unsubscribe();
+    this.widgetCreateSubscription?.unsubscribe();
+    this.closeMobileComposerSubscription?.unsubscribe();
+    this.preferencesSubscription?.unsubscribe();
+    document.removeEventListener('selectionchange', this.textSelectionChangeHandler);
+    window.removeEventListener('resize', this.textSelectionRepositionHandler);
+    document.removeEventListener('scroll', this.textSelectionRepositionHandler, true);
+    if (this.textSelectionFrame) cancelAnimationFrame(this.textSelectionFrame);
+    this.unbindKeyboardOffset();
+    this.unbindAndroidBackgroundLocationResume();
+    this.unlockBodyScroll();
+  }
+
+  applyExternalUpdate(note: NoteI) {
+    const externalSnapshot = JSON.stringify([note.updatedAt, this.noteSaveSnapshot(note)]);
+    // List/cache refreshes can publish the same saved note more than once.
+    // Reapplying it would replace text typed since we first received it.
+    if (externalSnapshot === this.lastExternalUpdateSnapshot) return;
+    this.lastExternalUpdateSnapshot = externalSnapshot;
+    const baseline: NoteI = JSON.parse(this.saveBaselineSnapshot ?? this.noteSaveSnapshot(this.noteToEdit));
+    if (this.noteTitle?.nativeElement && this.noteTitle.nativeElement.innerHTML !== note.noteTitle) {
+      this.updateHtmlWithCursorPreservation(this.noteTitle.nativeElement, note.noteTitle);
+    }
+    const nextBody = note.noteBody !== undefined ? this.decorateLinksForEditor(note.noteBody || '') : undefined;
+    if (note.contentFormat === 'markdown' && typeof note.markdownSource === 'string') {
+      this.markdownSource = note.markdownSource;
+    }
+    if (this.noteBody?.nativeElement && nextBody !== undefined && this.noteBody.nativeElement.innerHTML !== nextBody) {
+      this.updateHtmlWithCursorPreservation(this.noteBody.nativeElement, nextBody);
+    }
+    if (this.noteMain?.nativeElement) {
+      this.noteMain.nativeElement.style.backgroundColor = note.bgColor || '#ffffff';
+      this.applyBackgroundImage('');
+    }
+    if (!this.cboxDragImage) {
+      this.checkBoxes = this.normalizeCheckBoxes(note.checkBoxes || []);
+      this.resetCboxHistory();
+    }
+    const oldDrawing = this.images.find(i => i.id === 'drawing');
+    this.images = (note.images || []).map(image => ({ ...image, dataUrl: this.auth.authenticatedImageUrl(image.dataUrl) }));
+    this.attachments = note.attachments || [];
+    const newDrawing = this.images.find(i => i.id === 'drawing');
+    if (this.isDrawingNote && newDrawing && newDrawing.dataUrl !== oldDrawing?.dataUrl) {
+      this.drawingHistory = [newDrawing.dataUrl];
+      this.drawingHistoryIndex = 0;
+      this.restoreDrawingHistory();
+    }
+    this.isHybridNote = !!note.isCbox && this.hasMeaningfulBody(note.noteBody);
+    this.isCbox.next(note.isCbox);
+    this.cd.detectChanges();
+    // Received content is already saved. Advance only the fields applied above,
+    // keeping pending local metadata changes distinguishable from the baseline.
+    this.saveBaselineSnapshot = this.noteSaveSnapshot({
+      ...baseline,
+      noteTitle: this.noteTitle.nativeElement.innerHTML,
+      noteBody: nextBody === undefined ? baseline.noteBody : this.cleanEditorBodyForSave(this.noteBody?.nativeElement.innerHTML ?? nextBody),
+      markdownSource: note.markdownSource ?? baseline.markdownSource,
+      contentFormat: note.contentFormat ?? baseline.contentFormat,
+      bgColor: this.noteMain.nativeElement.style.backgroundColor,
+      bgImage: this.noteMain.nativeElement.style.backgroundImage || this.noteContainer.nativeElement.style.backgroundImage,
+      checkBoxes: this.cboxDragImage ? baseline.checkBoxes : this.currentCheckBoxesForSave(false),
+      images: this.images,
+      isCbox: this.isCbox.value,
+      labels: this.labelsDirty ? baseline.labels : note.labels
+    });
+  }
+
+  updateHtmlWithCursorPreservation(element: HTMLElement, newHtml: string) {
+    const selection = window.getSelection();
+    let savedOffset = 0;
+    let hasFocus = document.activeElement === element;
+    
+    if (hasFocus && selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const preSelectionRange = range.cloneRange();
+      preSelectionRange.selectNodeContents(element);
+      preSelectionRange.setEnd(range.startContainer, range.startOffset);
+      savedOffset = preSelectionRange.toString().length;
+    }
+    
+    element.innerHTML = sanitizeNoteHtml(newHtml);
+    
+    if (hasFocus && selection) {
+      let charIndex = 0;
+      const range = document.createRange();
+      range.setStart(element, 0);
+      range.collapse(true);
+      
+      const nodeStack: Node[] = [element];
+      let node;
+      let foundStart = false;
+      
+      while (!foundStart && (node = nodeStack.pop())) {
+        if (node.nodeType === 3) {
+          const nextCharIndex = charIndex + (node.textContent?.length || 0);
+          if (!foundStart && savedOffset >= charIndex && savedOffset <= nextCharIndex) {
+            range.setStart(node, savedOffset - charIndex);
+            range.setEnd(node, savedOffset - charIndex);
+            foundStart = true;
+          }
+          charIndex = nextCharIndex;
+        } else {
+          let i = node.childNodes.length;
+          while (i--) {
+            nodeStack.push(node.childNodes[i]);
+          }
+        }
+      }
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+  }
+
+  deleteImage(image: any) {
+    this.images = this.images.filter(img => img.id !== image.id)
+    this.queueAutosave()
+  }
+
+  getActiveReminder() {
+    if (this.pendingReminderDate) {
+      return { dueAtUtc: this.pendingReminderDate.toISOString(), status: 'pending' as const }
+    }
+    if (this.pendingReminderLocation) {
+      return { locationName: this.pendingReminderLocation.locationName, status: 'pending' as const }
+    }
+    if (!this.isEditing || !this.noteToEdit.id) return null
+    return this.reminderService.reminders$.value.find(r => r.noteId === this.noteToEdit.id && r.status === 'pending')
+  }
+
+  getPastReminder() {
+    if (!this.preferences.value.showPastReminders || !this.isEditing || !this.noteToEdit.id) return null
+    return this.reminderService.getFiredForNote(this.noteToEdit.id) || null
+  }
+
+  getDisplayedReminder() {
+    return this.getActiveReminder() || this.getPastReminder()
+  }
+
+  reminderChipTapped(event: Event, status?: string) {
+    if (status !== 'fired') {
+      this.alarmIconTapped(event)
+      return
+    }
+    event.stopPropagation()
+    this.showReminderPicker = !this.showReminderPicker
+    document.removeEventListener('mousedown', this.pickerOutsideHandler)
+    if (this.showReminderPicker) {
+      setTimeout(() => document.addEventListener('mousedown', this.pickerOutsideHandler), 0)
+    }
+  }
+
+  reschedulePastReminder(event: Event) {
+    event.stopPropagation()
+    this.closeReminderPicker()
+    if (this.keptPlugins.supportsNativeLocationReminders) {
+      this.openReminderTypeDialog()
+      return
+    }
+    this.customDate = ''
+    this.customTime = ''
+    this.calendarMonth = this.startOfMonth(new Date())
+    this.destroyTimePicker()
+    this.showReminderDateDialog = true
+  }
+
+  @ViewChild('alarmDateInp') customDateInp?: ElementRef<HTMLInputElement>
+  @ViewChild('customTimeInp') customTimeInp?: ElementRef<HTMLInputElement>
+
+  alarmIconTapped(event: Event) {
+    event.stopPropagation()
+
+    // iOS Safari requires Notification.requestPermission() to be invoked
+    // synchronously inside a user gesture. Fire it on this tap so the
+    // gesture token is still alive when iOS asks.
+    this.promptForNotificationPermission()
+
+    // If a reminder already exists, toggle the inline "Remove reminder"
+    // panel — there's no overlaid date input in that case.
+    if (this.getActiveReminder()) {
+      if (this.showReminderPicker) {
+        this.closeReminderPicker()
+      } else {
+        this.showReminderPicker = true
+        document.removeEventListener('mousedown', this.pickerOutsideHandler)
+        setTimeout(() => document.addEventListener('mousedown', this.pickerOutsideHandler), 0)
+      }
+      return
+    }
+
+    if (this.keptPlugins.supportsNativeLocationReminders) {
+      this.openReminderTypeDialog()
+      return
+    }
+
+    this.customDate = ''
+    this.customTime = ''
+    this.calendarMonth = this.startOfMonth(new Date())
+    this.destroyTimePicker()
+    this.showReminderDateDialog = true
+  }
+
+  openReminderTypeDialog() {
+    this.showReminderPicker = false
+    this.showReminderTypeDialog = true
+    this.showReminderDateDialog = false
+    this.showReminderLocationDialog = false
+    this.customDate = ''
+    this.customTime = ''
+    this.calendarMonth = this.startOfMonth(new Date())
+    this.destroyTimePicker()
+    this.resetLocationState()
+    document.removeEventListener('mousedown', this.pickerOutsideHandler)
+    setTimeout(() => document.addEventListener('mousedown', this.pickerOutsideHandler), 0)
+  }
+
+  chooseReminderDateTime() {
+    this.showReminderTypeDialog = false
+    this.showReminderDateDialog = true
+  }
+
+  chooseReminderPlace() {
+    this.showReminderTypeDialog = false
+    this.showReminderLocationDialog = true
+    this.openPlaceChooser()
+  }
+
+  cancelReminderType() {
+    this.closeReminderPicker()
+  }
+
+  private openDateThenTimeFlow(trigger?: HTMLElement | null) {
+    this.customDate = ''
+    this.customTime = ''
+    this.destroyTimePicker()
+
+    const dateInput = this.customDateInp?.nativeElement
+    if (!dateInput) return
+
+    dateInput.value = ''
+    const minDate = new Date()
+    minDate.setHours(0, 0, 0, 0)
+    dateInput.min = this.formatLocalDateInput(minDate)
+
+    // Anchor the system picker next to the alarm icon that triggered it,
+    // not at the input's CSS position. Without this, Chrome/Firefox render
+    // the calendar at the off-screen input location (top-left of the modal
+    // in our case), and iOS sometimes refuses to open it at all.
+    this.positionPickerInput(dateInput, trigger || null)
+
+    try {
+      if (typeof (dateInput as any).showPicker === 'function') {
+        (dateInput as any).showPicker()
+      } else {
+        dateInput.focus()
+        dateInput.click()
+      }
+    } catch {
+      dateInput.focus()
+    }
+  }
+
+  // Two-stage confirmation flow: tapping the alarm icon opens the system
+  // date picker. When the user picks a date the input's `change` event
+  // fires — but instead of auto-progressing to the time picker (which on
+  // iOS happens too eagerly when the user just dismisses the wheel), we
+  // surface a small "Pick time" button. The user explicitly confirms by
+  // tapping it, which then opens the time picker. This avoids the iOS
+  // Safari behaviour of committing the wheel's default value on dismiss.
+  pendingDateConfirm: { dateInput: HTMLInputElement; timeInput: HTMLInputElement; date: string } | null = null
+
+  onAlarmDateFocus(_input: HTMLInputElement) {}
+  onAlarmDateBlur(_input: HTMLInputElement, _timeInput: HTMLInputElement) {}
+
+  onAlarmDateInputChange(input: HTMLInputElement, timeInput: HTMLInputElement) {
+    if (!input.value) {
+      this.pendingDateConfirm = null
+      return
+    }
+    this.customDate = input.value
+    this.pendingDateConfirm = { dateInput: input, timeInput, date: input.value }
+  }
+
+  confirmPendingDate() {
+    const p = this.pendingDateConfirm
+    if (!p) return
+    this.pendingDateConfirm = null
+    this.createTimePicker(p.dateInput, p.timeInput)
+    this.customTimePicker?.open()
+  }
+
+  cancelPendingDate() {
+    if (this.pendingDateConfirm) {
+      this.pendingDateConfirm.dateInput.value = ''
+    }
+    this.pendingDateConfirm = null
+    this.customDate = ''
+  }
+
+  formatPendingDateLabel(iso: string): string {
+    if (!iso) return ''
+    const [y, m, d] = iso.split('-').map(Number)
+    if (!y || !m || !d) return iso
+    const date = new Date(y, m - 1, d)
+    return date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  }
+
+  // Legacy passthrough for any callers still wired to onGlobalDateChange.
+  onGlobalDateChange(dateInput: HTMLInputElement, timeInput: HTMLInputElement) {
+    this.onAlarmDateInputChange(dateInput, timeInput)
+  }
+
+  private formatLocalDateInput(date: Date) {
+    const yyyy = date.getFullYear()
+    const mm = String(date.getMonth() + 1).padStart(2, '0')
+    const dd = String(date.getDate()).padStart(2, '0')
+    return `${yyyy}-${mm}-${dd}`
+  }
+
+  todayDateInput() {
+    const minDate = new Date()
+    minDate.setHours(0, 0, 0, 0)
+    return this.formatLocalDateInput(minDate)
+  }
+
+  calendarMonthLabel() {
+    return this.calendarMonth.toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
+  }
+
+  calendarDays() {
+    const month = this.calendarMonth.getMonth()
+    const year = this.calendarMonth.getFullYear()
+    const first = new Date(year, month, 1)
+    const start = new Date(first)
+    start.setDate(1 - first.getDay())
+    const today = this.todayDateInput()
+    const selected = this.customDate
+
+    return Array.from({ length: 42 }, (_, index) => {
+      const date = new Date(start)
+      date.setDate(start.getDate() + index)
+      const iso = this.formatLocalDateInput(date)
+      return {
+        date: iso,
+        day: date.getDate(),
+        currentMonth: date.getMonth() === month,
+        disabled: iso < today,
+        selected: iso === selected,
+        today: iso === today
+      }
+    })
+  }
+
+  shiftCalendarMonth(delta: number) {
+    const next = new Date(this.calendarMonth)
+    next.setMonth(next.getMonth() + delta)
+    this.calendarMonth = this.startOfMonth(next)
+  }
+
+  selectCalendarDate(date: string) {
+    if (date < this.todayDateInput()) return
+    this.customDate = date
+  }
+
+  private startOfMonth(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), 1)
+  }
+
+  confirmReminderDate(timeInput: HTMLInputElement) {
+    if (!this.customDate) return
+    this.showReminderDateDialog = false
+    this.createTimePicker(null, timeInput)
+    this.customTimePicker?.open()
+  }
+
+  cancelReminderDate() {
+    this.customDate = ''
+    this.showReminderDateDialog = false
+  }
+
+  private positionPickerInput(input: HTMLInputElement, trigger: HTMLElement | null) {
+    if (!trigger) {
+      input.style.left = '50%'
+      input.style.top = '50%'
+      return
+    }
+    const rect = trigger.getBoundingClientRect()
+    input.style.left = `${Math.max(0, rect.left)}px`
+    input.style.top = `${Math.max(0, rect.bottom)}px`
+  }
+
+  closeReminderPicker() {
+    this.showReminderPicker = false
+    this.showReminderTypeDialog = false
+    this.showReminderDateDialog = false
+    this.showReminderLocationDialog = false
+    this.resetReminderRepeatState()
+    this.resetLocationState()
+    this.destroyTimePicker()
+    document.removeEventListener('mousedown', this.pickerOutsideHandler)
+  }
+
+  setReminderRepeatType(type: ReminderRepeatType) {
+    this.reminderRepeatType = type
+    if (type !== 'custom_days') this.reminderRepeatCustomDays = 2
+  }
+
+  private selectedReminderRepeatRule(): ReminderRepeatRule | null {
+    if (this.reminderRepeatType === 'none') {
+      return this.reminderMoveToTopOnTrigger ? { type: 'none', moveToTopOnTrigger: true } : null
+    }
+    const intervalDays = Math.max(1, Math.floor(Number(this.reminderRepeatCustomDays) || 1))
+    return {
+      type: this.reminderRepeatType,
+      ...(this.reminderRepeatType === 'custom_days' ? { intervalDays } : {}),
+      moveToTopOnTrigger: this.reminderMoveToTopOnTrigger
+    }
+  }
+
+  private resetReminderRepeatState() {
+    this.reminderRepeatType = 'none'
+    this.reminderRepeatCustomDays = 2
+    this.reminderMoveToTopOnTrigger = false
+  }
+
+  // Synchronous-from-gesture permission request. iOS Safari refuses to show
+  // the prompt unless Notification.requestPermission() is invoked directly
+  // in a user gesture, so this MUST not await anything before the call.
+  private promptForNotificationPermission() {
+    if (typeof Notification === 'undefined') return
+    if (Notification.permission === 'granted') {
+      this.reminderService.requestBrowserNotifications()
+      return
+    }
+    if (Notification.permission === 'denied') {
+      try {
+        (window as any).Snackbar?.show({
+          pos: 'bottom-left',
+          text: 'Notifications are blocked. Enable them in Settings → Notifications → Kept.',
+          duration: 5000
+        })
+      } catch {}
+      return
+    }
+    if (this.reminderService.isIos() && !this.reminderService.isStandalone()) {
+      try {
+        (window as any).Snackbar?.show({
+          pos: 'bottom-left',
+          text: 'On iOS, open Kept from the Home Screen icon to enable reminders. (Safari tabs cannot register notifications.)',
+          duration: 6000
+        })
+      } catch {}
+      return
+    }
+    const result = Notification.requestPermission()
+    if (result && typeof result.then === 'function') {
+      result.then(permission => {
+        if (permission === 'granted') {
+          this.reminderService.requestBrowserNotifications()
+        }
+      }).catch(() => {})
+    }
+  }
+
+  private pickerOutsideHandler = (event: Event) => {
+    const target = event.target as HTMLElement
+    const picker = document.querySelector('.reminder-picker, .reminder-date-dialog')
+    const isTimePickerClick = target.closest('.tp-ui-modal') || target.closest('.tp-ui-wrapper')
+    if (picker && !picker.contains(target) && !isTimePickerClick) {
+      this.closeReminderPicker()
+    }
+  }
+
+  setReminder(date: Date) {
+    // Backup prompt for users who skipped the picker open (e.g. via custom
+    // date input). Permission was already requested when the picker opened.
+    this.promptForNotificationPermission()
+    const repeatRule = this.selectedReminderRepeatRule()
+    if (this.isEditing && this.noteToEdit.id) {
+      const existing = this.getDisplayedReminder()
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+      if (existing && (existing as any).id) {
+        this.reminderService.update((existing as any).id, { dueAtUtc: date.toISOString(), status: 'pending', repeatRule })
+          .then(result => { if (!result) this.showReminderSaveError() })
+          .catch(() => this.showReminderSaveError())
+      } else {
+        this.reminderService.create({
+          noteId: this.noteToEdit.id,
+          dueAtUtc: date.toISOString(),
+          timezone: tz,
+          repeatRule,
+          title: this.notePlainText(this.noteToEdit.noteTitle),
+          body: this.notePlainText(this.noteToEdit.noteBody)
+        }).then(result => { if (!result) this.showReminderSaveError() })
+          .catch(() => this.showReminderSaveError())
+      }
+    } else {
+      // For new notes, store locally until save
+      this.pendingReminderDate = date
+      this.pendingReminderRepeatRule = repeatRule
+    }
+    this.closeReminderPicker()
+    this.resetReminderRepeatState()
+    this.cd.detectChanges()
+  }
+
+  confirmCustom(dateInp: HTMLInputElement | null, timeInp: HTMLInputElement) {
+    // Prefer our stored state over the raw input value to avoid race conditions
+    const d = dateInp?.value || this.customDate
+    const t = this.toTwentyFourHourTime(this.customTime || timeInp.value)
+    
+    if (!d || !t) return
+    this.customPickerOpen = false
+    this.setReminder(new Date(`${d}T${t}`))
+  }
+
+  async clearReminder(event: Event) {
+    event.stopPropagation()
+    if (this.pendingReminderDate || this.pendingReminderLocation) {
+      this.pendingReminderDate = null
+      this.pendingReminderRepeatRule = null
+      this.pendingReminderLocation = null
+      this.pendingAndroidLocationReminder = null
+      this.showAndroidBackgroundLocationEducation = false
+      this.androidBackgroundLocationMessage = ''
+      this.unbindAndroidBackgroundLocationResume()
+      this.closeReminderPicker()
+      this.cd.detectChanges()
+      return
+    }
+    if (this.isEditing && this.noteToEdit.id) {
+      const existing = this.getDisplayedReminder()
+      if (existing && (existing as any).id) await this.reminderService.delete((existing as any).id)
+    } else {
+      this.pendingReminderDate = null
+      this.pendingReminderRepeatRule = null
+      this.pendingReminderLocation = null
+    }
+    this.closeReminderPicker()
+    this.cd.detectChanges()
+  }
+
+  private createTimePicker(dateInput: HTMLInputElement | null, timeInput: HTMLInputElement) {
+    if (this.preferences.value.useTwentyFourHourTime) ensureTimepickerWheelPlugin()
+    if (this.customTimePicker && this.customTimePickerInput === timeInput) {
+      this.timePickerDateInput = dateInput || this.timePickerDateInput
+      return
+    }
+    this.destroyTimePicker()
+    this.timePickerDateInput = dateInput || undefined
+    this.customTimePickerInput = timeInput
+    timeInput.value = this.customTime || this.currentTimeValue()
+    this.customTimePicker = new TimepickerUI(timeInput, {
+      clock: {
+        type: this.preferences.value.useTwentyFourHourTime ? '24h' : '12h',
+        currentTime: { time: new Date(), updateInput: true }
+      },
+      ui: {
+        mode: this.preferences.value.useTwentyFourHourTime ? 'compact-wheel' : 'clock',
+        editable: false
+      },
+      callbacks: {
+        onOpen: () => {
+        },
+        onConfirm: (data: ConfirmEventData) => {
+          this.zone.run(() => {
+            const hour = String(data.hour || '00').padStart(2, '0')
+            const minutes = String(data.minutes || '00').padStart(2, '0')
+            const period = data.type ? ` ${data.type}` : ''
+            this.customTime = `${hour}:${minutes}${period}`
+            const dInp = this.timePickerDateInput
+            if (dInp?.value || this.customDate) {
+              setTimeout(() => this.confirmCustom(dInp || null, timeInput), 0)
+            }
+          })
+        }
+      }
+    })
+    this.customTimePicker.create()
+  }
+
+  private timePickerDateInput?: HTMLInputElement
+
+  private destroyTimePicker() {
+    this.customTimePicker?.destroy({ keepInputValue: true })
+    this.customTimePicker = undefined
+    this.customTimePickerInput = undefined
+  }
+
+  private toTwentyFourHourTime(value: string) {
+    if (!value) return ''
+    const time = value.trim().toUpperCase().replace(/\./g, '') // handle p.m. -> PM
+    const twelveHour = time.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/)
+    if (twelveHour) {
+      let hour = Number(twelveHour[1])
+      if (twelveHour[3] === 'PM' && hour < 12) hour += 12
+      if (twelveHour[3] === 'AM' && hour === 12) hour = 0
+      return `${String(hour).padStart(2, '0')}:${twelveHour[2]}`
+    }
+    const twentyFourHour = time.match(/^(\d{1,2}):(\d{2})$/)
+    if (!twentyFourHour) return ''
+    const hour = Number(twentyFourHour[1])
+    if (hour > 23 || Number(twentyFourHour[2]) > 59) return ''
+    return `${String(hour).padStart(2, '0')}:${twentyFourHour[2]}`
+  }
+
+  private currentTimeValue() {
+    return new Date().toLocaleTimeString(undefined, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: this.preferences.value.useTwentyFourHourTime ? false : undefined
+    })
+  }
+
+  inHours(n: number): Date { return new Date(Date.now() + n * 60 * 60 * 1000) }
+  tomorrow(): Date { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return d }
+  nextWeek(): Date { const d = new Date(); const daysUntilMonday = ((8 - d.getDay()) % 7) || 7; d.setDate(d.getDate() + daysUntilMonday); d.setHours(9, 0, 0, 0); return d }
+  formatReminderDate(isoString: string): string {
+    return new Date(isoString).toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: this.preferences.value.useTwentyFourHourTime ? '2-digit' : 'numeric',
+      minute: '2-digit',
+      hour12: this.preferences.value.useTwentyFourHourTime ? false : undefined
+    })
+  }
+
+  // ─── Location reminders ───────────────────────────────────────────────
+
+  async openPlaceChooser() {
+    this.placeDialogView = 'choose'
+    this.editingSavedPlace = null
+    this.resetLocationState()
+    this.savedPlacesSearch = ''
+    this.locationTrigger = 'arrive'
+    await Promise.all([this.loadSavedPlaces(), this.loadCurrentLocation()])
+  }
+
+  backFromPlaceDialog() {
+    if (this.addPlaceSaving) return
+    if (this.showLocationMap) { this.closeLocationMap(); return }
+    if (this.placeDialogView === 'add' && this.savedPlaceReturnView === 'manage') {
+      this.cancelSavedPlace()
+      return
+    }
+    if (this.placeDialogView !== 'choose') {
+      this.openPlaceChooser()
+      return
+    }
+    this.showReminderLocationDialog = false
+    this.showReminderTypeDialog = true
+  }
+
+  async loadSavedPlaces() {
+    this.savedPlacesLoading = true
+    this.savedPlacesError = ''
+    try {
+      this.savedPlaces = await this.savedPlacesService.list()
+    } catch {
+      this.savedPlacesError = 'Saved places could not load.'
+    } finally {
+      this.savedPlacesLoading = false
+      this.cd.detectChanges()
+    }
+  }
+
+  visiblePlaceItems(): PlaceListItem[] {
+    const q = this.savedPlacesSearch.trim().toLowerCase()
+    const items: PlaceListItem[] = [...this.savedPlaces]
+    if (!this.savedPlaces.some(place => place.placeType === 'home')) {
+      items.push({ id: 'home-prompt', name: 'Home', address: 'Add your home address', placeType: 'home', prompt: true })
+    }
+    if (!this.savedPlaces.some(place => place.placeType === 'work')) {
+      items.push({ id: 'work-prompt', name: 'Work', address: 'Add your work address', placeType: 'work', prompt: true })
+    }
+    if (!q) return items
+    return items.filter(place =>
+      place.name.toLowerCase().includes(q) ||
+      (place.address || '').toLowerCase().includes(q)
+    )
+  }
+
+  visibleSavedPlaces() {
+    const q = this.savedPlacesSearch.trim().toLowerCase()
+    if (!q) return this.savedPlaces
+    return this.savedPlaces.filter(place =>
+      place.name.toLowerCase().includes(q) ||
+      (place.address || '').toLowerCase().includes(q)
+    )
+  }
+
+  placeIcon(placeType: SavedPlaceType) {
+    switch (placeType) {
+      case 'home': return 'home'
+      case 'work': return 'business_center'
+      case 'gym': return 'fitness_center'
+      default: return 'location_on'
+    }
+  }
+
+  placeDistanceLabel(place: PlaceListItem | ResolvedLocation) {
+    if ('prompt' in place) return ''
+    if (this.currentLocationLoading && !this.currentLocation) return '...'
+    if (!this.currentLocation) return ''
+    if (![this.currentLocation.latitude, this.currentLocation.longitude, place.latitude, place.longitude].every(Number.isFinite)) return ''
+    const meters = this.distanceMeters(
+      this.currentLocation.latitude,
+      this.currentLocation.longitude,
+      place.latitude,
+      place.longitude
+    )
+    return this.formatDistance(meters)
+  }
+
+  openManagePlaces() {
+    this.placeDialogView = 'manage'
+    this.savedPlacesSearch = ''
+    this.swipingPlaceId = null
+  }
+
+  openAddSavedPlace(seedType: SavedPlaceType = 'other') {
+    this.savedPlaceReturnView = this.placeDialogView === 'manage' ? 'manage' : 'choose'
+    this.editingSavedPlace = null
+    this.savedPlacesError = ''
+    this.placeDialogView = 'add'
+    this.resetLocationState()
+    this.locationTrigger = 'arrive'
+    this.addPlaceType = seedType
+    this.addPlaceName = seedType === 'other' ? '' : this.titleCase(seedType)
+    this.addPlaceRadiusMeters = 100
+  }
+
+  openEditSavedPlace(place: LocationSavedPlace) {
+    if (this.placeSwipeMoved) { this.placeSwipeMoved = false; return }
+    if (this.swipingPlaceId === place.id) { this.swipingPlaceId = null; return }
+    this.swipingPlaceId = null
+    this.resetLocationState()
+    this.editingSavedPlace = place
+    this.savedPlaceReturnView = 'manage'
+    this.savedPlacesError = ''
+    this.placeDialogView = 'add'
+    this.addPlaceName = place.name
+    this.addPlaceType = place.placeType
+    this.addPlaceRadiusMeters = place.radiusMeters
+    this.locationTrigger = place.locationTrigger
+    this.locationPhrase = place.address || ''
+    this.resolvedLocation = {
+      displayName: place.address,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      radiusMeters: place.radiusMeters,
+      confidence: 'high',
+      source: 'savedLocation'
+    }
+    this.locationState = 'resolved'
+    this.locationMapPreview = place.mapPreviewUrl || ''
+  }
+
+  cancelSavedPlace() {
+    if (this.addPlaceSaving) return
+    this.editingSavedPlace = null
+    this.savedPlacesError = ''
+    this.resetLocationState()
+    if (this.savedPlaceReturnView === 'manage') this.placeDialogView = 'manage'
+    else this.clearLocation()
+  }
+
+  openSearchPlace(keepPhrase = false) {
+    const phrase = this.locationPhrase
+    this.placeDialogView = 'search'
+    this.resetLocationState()
+    if (keepPhrase) this.locationPhrase = phrase
+    this.locationTrigger = 'arrive'
+  }
+
+  openLocationMap() {
+    if (this.placeDialogView === 'choose') this.openSearchPlace()
+    this.locationMapCenter = this.resolvedLocation || this.currentLocation || this.savedPlaces[0] || null
+    this.locationMapError = ''
+    this.locationMapRequest++
+    this.showLocationMap = true
+  }
+
+  closeLocationMap() {
+    this.locationMapRequest++
+    this.showLocationMap = false
+  }
+
+  selectMapLocation(pin: LocationPin) {
+    if (!Number.isFinite(pin.latitude) || Math.abs(pin.latitude) > 90 || !Number.isFinite(pin.longitude) || Math.abs(pin.longitude) > 180) return
+    this.locationSearchRequest++
+    this.resolving = false
+    this.mapPinName = this.resolvedLocation?.source === 'mapPin' ? this.mapPinName : ''
+    this.resolvedLocation = { ...pin, displayName: this.mapPinName.trim() || 'Map pin', confidence: 'high', source: 'mapPin' }
+    this.locationState = 'resolved'
+    this.locationPhrase = ''
+    this.addPlaceRadiusMeters = pin.radiusMeters
+    this.closeLocationMap()
+    void this.hydrateLocationMapPreview(this.resolvedLocation)
+  }
+
+  async locateLocationMap() {
+    if (!this.showLocationMap || this.currentLocationLoading) return
+    const request = this.locationMapRequest
+    this.locationMapError = ''
+    if (!await this.ensureAndroidForegroundLocationDisclosureForSearch(this.placeDialogView, true)) return
+    if (!navigator.geolocation) { this.locationMapError = 'Current location is unavailable. You can still choose a spot on the map.'; return }
+    const found = await this.readCurrentLocation(true)
+    if (!this.showLocationMap || request !== this.locationMapRequest) return
+    if (found) this.locationMapCenter = this.currentLocation
+    else this.locationMapError = 'Could not get your location. Check location access, or choose a spot on the map.'
+    this.cd.detectChanges()
+  }
+
+  async resolveLocation(view: PlaceDialogView = this.placeDialogView) {
+    const phrase = this.locationPhrase.trim()
+    if (!phrase) return
+    const request = ++this.locationSearchRequest
+    this.resolving = true
+    this.locationState = 'idle'
+    try {
+      if (!await this.ensureAndroidForegroundLocationDisclosureForSearch(view)) return
+      await this.loadCurrentLocation()
+      const result = await this.keptPlugins.resolveLocation(phrase, this.savedPlaces, this.currentLocation)
+      if (request !== this.locationSearchRequest || !this.showReminderLocationDialog) return
+      if (!result) {
+        this.permissionReason = 'Location search is not available in this version of the app.'
+        this.locationState = 'permission'
+        return
+      }
+      switch (result.status) {
+        case 'resolved':
+          this.resolvedLocation = result.location
+          this.locationPhrase = result.location.displayName
+          this.locationState = 'resolved'
+          if (view === 'add' && !this.addPlaceName.trim()) {
+            this.addPlaceName = this.suggestPlaceName(result.location.displayName)
+          }
+          this.hydrateLocationMapPreview(result.location)
+          break
+        case 'ambiguous':
+          this.candidates = result.candidates
+          this.locationState = 'ambiguous'
+          break
+        case 'notFound':
+          this.locationState = 'notFound'
+          break
+        case 'needsLocationPermission':
+          this.permissionReason = result.reason
+          this.locationState = 'permission'
+          break
+      }
+    } catch {
+      if (request !== this.locationSearchRequest) return
+      this.permissionReason = 'Place search could not complete. Try again or choose a spot on the map.'
+      this.locationState = 'permission'
+    } finally {
+      if (request === this.locationSearchRequest) this.resolving = false
+    }
+  }
+
+  selectCandidate(candidate: ResolvedLocation) {
+    this.resolvedLocation = candidate
+    this.locationPhrase = candidate.displayName
+    this.locationState = 'resolved'
+    if (this.placeDialogView === 'add' && !this.addPlaceName.trim()) {
+      this.addPlaceName = this.suggestPlaceName(candidate.displayName)
+    }
+    this.hydrateLocationMapPreview(candidate)
+  }
+
+  resetLocationState() {
+    this.locationSearchRequest++
+    this.closeLocationMap()
+    this.mapPinName = ''
+    this.locationState = 'idle'
+    this.locationPhrase = ''
+    this.resolvedLocation = null
+    this.locationMapPreview = ''
+    this.candidates = []
+    this.resolving = false
+    this.permissionReason = ''
+  }
+
+  clearLocation() {
+    this.editingSavedPlace = null
+    this.resetLocationState()
+    this.showReminderLocationDialog = false
+  }
+
+  async confirmSavedPlaceReminder(place: LocationSavedPlace) {
+    await this.prepareLocationReminder({
+      displayName: place.name || place.address || 'Saved place',
+      latitude: place.latitude,
+      longitude: place.longitude,
+      radiusMeters: place.radiusMeters,
+      confidence: 'high',
+      source: 'savedLocation'
+    }, place.locationTrigger)
+  }
+
+  choosePlaceItem(place: PlaceListItem) {
+    if ('prompt' in place) {
+      this.openAddSavedPlace(place.placeType)
+      return
+    }
+    this.confirmSavedPlaceReminder(place)
+  }
+
+  async confirmLocationReminder(location = this.resolvedLocation, trigger = this.locationTrigger) {
+    if (!location) return
+    if (location.source === 'mapPin') location = { ...location, displayName: this.mapPinName.trim() || 'Map pin' }
+    await this.prepareLocationReminder(location, trigger)
+  }
+
+  private async prepareLocationReminder(location: ResolvedLocation, trigger: LocationTrigger) {
+    const permissionReady = await this.ensureLocationReminderPermissionsOrEducate(location, trigger)
+    if (!permissionReady) return
+    this.setPendingLocationReminder(location, trigger)
+  }
+
+  private async ensureLocationReminderPermissionsOrEducate(location: ResolvedLocation, trigger: LocationTrigger) {
+    const status = await this.reminderService.getAndroidLocationPermissionStatus()
+    if (!status) return true
+
+    let locationStatus = status
+    if (!locationStatus.foregroundGranted) {
+      this.pendingAndroidLocationReminder = { location, trigger }
+      this.androidLocationEducationMode = 'foreground'
+      this.androidBackgroundLocationMessage = ''
+      this.showAndroidBackgroundLocationEducation = true
+      this.cd.detectChanges()
+      return false
+    }
+
+    if (!locationStatus.backgroundGranted) {
+      this.pendingAndroidLocationReminder = { location, trigger }
+      this.androidLocationEducationMode = 'background'
+      this.androidBackgroundLocationMessage = ''
+      this.showAndroidBackgroundLocationEducation = true
+      this.bindAndroidBackgroundLocationResume()
+      this.cd.detectChanges()
+      return false
+    }
+
+    const notificationsOk = await this.reminderService.ensureAndroidGeofenceNotificationPermission()
+    if (!notificationsOk) {
+      this.permissionReason = 'Notification permission is needed so Kept can show location reminder alerts.'
+      this.locationState = 'permission'
+      return false
+    }
+    return true
+  }
+
+  private async ensureAndroidForegroundLocationDisclosureForSearch(view: PlaceDialogView, map = false) {
+    const status = await this.reminderService.getAndroidLocationPermissionStatus()
+    if (!status || status.foregroundGranted) return true
+    this.pendingAndroidLocationSearch = { view, map }
+    this.pendingAndroidLocationReminder = null
+    this.androidLocationEducationMode = 'foreground'
+    this.androidBackgroundLocationMessage = ''
+    this.showAndroidBackgroundLocationEducation = true
+    this.cd.detectChanges()
+    return false
+  }
+
+  async continueAndroidLocationDisclosure() {
+    if (this.androidLocationEducationMode === 'background') {
+      await this.openAndroidBackgroundLocationSettings()
+      return
+    }
+
+    const pendingReminder = this.pendingAndroidLocationReminder
+    const pendingSearch = this.pendingAndroidLocationSearch
+    if (!pendingReminder && !pendingSearch) return
+    this.androidBackgroundLocationMessage = ''
+
+    const status = await this.reminderService.requestAndroidForegroundLocationPermission()
+    if (!status?.foregroundGranted) {
+      this.androidBackgroundLocationMessage = 'Location permission is needed to create location reminders.'
+      this.cd.detectChanges()
+      return
+    }
+
+    if (pendingSearch) {
+      this.pendingAndroidLocationSearch = null
+      this.showAndroidBackgroundLocationEducation = false
+      this.androidBackgroundLocationMessage = ''
+      if (pendingSearch.map) void this.locateLocationMap()
+      else this.resolveLocation(pendingSearch.view)
+      return
+    }
+
+    const pending = pendingReminder!
+    if (!status.backgroundGranted) {
+      this.androidLocationEducationMode = 'background'
+      this.androidBackgroundLocationMessage = ''
+      this.bindAndroidBackgroundLocationResume()
+      this.cd.detectChanges()
+      return
+    }
+
+    const notificationsOk = await this.reminderService.ensureAndroidGeofenceNotificationPermission()
+    if (!notificationsOk) {
+      this.androidBackgroundLocationMessage = 'Notification permission is needed so Kept can show this reminder.'
+      this.cd.detectChanges()
+      return
+    }
+
+    this.pendingAndroidLocationReminder = null
+    this.showAndroidBackgroundLocationEducation = false
+    this.androidBackgroundLocationMessage = ''
+    this.unbindAndroidBackgroundLocationResume()
+    this.setPendingLocationReminder(pending.location, pending.trigger)
+  }
+
+  async openAndroidBackgroundLocationSettings() {
+    this.androidBackgroundLocationMessage = ''
+    await this.reminderService.openAndroidBackgroundLocationSettings()
+  }
+
+  cancelAndroidBackgroundLocationEducation() {
+    this.showAndroidBackgroundLocationEducation = false
+    this.androidLocationEducationMode = 'background'
+    this.androidBackgroundLocationMessage = ''
+    this.pendingAndroidLocationReminder = null
+    this.pendingAndroidLocationSearch = null
+    this.unbindAndroidBackgroundLocationResume()
+  }
+
+  private bindAndroidBackgroundLocationResume() {
+    if (this.androidBackgroundLocationResumeHandler || typeof document === 'undefined') return
+    this.androidBackgroundLocationResumeHandler = () => {
+      if (document.visibilityState === 'visible') this.resumePendingAndroidLocationReminder()
+    }
+    this.androidBackgroundLocationFocusHandler = () => this.resumePendingAndroidLocationReminder()
+    document.addEventListener('visibilitychange', this.androidBackgroundLocationResumeHandler)
+    window.addEventListener('focus', this.androidBackgroundLocationFocusHandler)
+  }
+
+  private unbindAndroidBackgroundLocationResume() {
+    if (this.androidBackgroundLocationResumeHandler) {
+      document.removeEventListener('visibilitychange', this.androidBackgroundLocationResumeHandler)
+      this.androidBackgroundLocationResumeHandler = undefined
+    }
+    if (this.androidBackgroundLocationFocusHandler) {
+      window.removeEventListener('focus', this.androidBackgroundLocationFocusHandler)
+      this.androidBackgroundLocationFocusHandler = undefined
+    }
+  }
+
+  private async resumePendingAndroidLocationReminder() {
+    const pending = this.pendingAndroidLocationReminder
+    if (!pending || this.androidBackgroundLocationResumeRunning) return
+    this.androidBackgroundLocationResumeRunning = true
+    try {
+      const status = await this.reminderService.getAndroidLocationPermissionStatus()
+      if (!status?.backgroundGranted) {
+        this.androidBackgroundLocationMessage = 'Permission still needed. Choose “Allow all the time” to enable this reminder.'
+        this.showAndroidBackgroundLocationEducation = true
+        this.cd.detectChanges()
+        return
+      }
+      const notificationsOk = await this.reminderService.ensureAndroidGeofenceNotificationPermission()
+      if (!notificationsOk) {
+        this.androidBackgroundLocationMessage = 'Notification permission is needed so Kept can show this reminder.'
+        this.showAndroidBackgroundLocationEducation = true
+        this.cd.detectChanges()
+        return
+      }
+      this.pendingAndroidLocationReminder = null
+      this.showAndroidBackgroundLocationEducation = false
+      this.androidBackgroundLocationMessage = ''
+      this.unbindAndroidBackgroundLocationResume()
+      this.setPendingLocationReminder(pending.location, pending.trigger)
+    } finally {
+      this.androidBackgroundLocationResumeRunning = false
+    }
+  }
+
+  private setPendingLocationReminder(location: ResolvedLocation, trigger: LocationTrigger) {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const pendingLocation = {
+      locationName: location.displayName,
+      latitude: location.latitude,
+      longitude: location.longitude,
+      radiusMeters: location.radiusMeters,
+      locationTrigger: trigger,
+      timezone: tz
+    }
+
+    this.pendingReminderDate = null
+    this.pendingReminderLocation = pendingLocation
+    this.clearLocation()
+    this.showReminderLocationDialog = false
+    this.cd.detectChanges()
+
+    if (this.isEditing && this.noteToEdit.id) {
+      const noteId = this.noteToEdit.id
+      const title = this.notePlainText(this.noteTitle?.nativeElement?.innerHTML || this.noteToEdit.noteTitle || '')
+      const body = this.notePlainText(this.noteBody?.nativeElement?.innerHTML || this.noteToEdit.noteBody || '')
+      this.reminderService.create({
+        noteId,
+        locationName: pendingLocation.locationName,
+        latitude: pendingLocation.latitude,
+        longitude: pendingLocation.longitude,
+        radiusMeters: pendingLocation.radiusMeters,
+        locationTrigger: pendingLocation.locationTrigger,
+        timezone: pendingLocation.timezone,
+        title,
+        body
+      }).then(result => {
+        if (result) {
+          this.pendingReminderLocation = null
+          this.cd.detectChanges()
+        } else {
+          this.showReminderSaveError()
+        }
+      }).catch(() => this.showReminderSaveError())
+    }
+  }
+
+  async saveSavedPlace() {
+    const location = this.resolvedLocation
+    if (!location || !this.addPlaceName.trim() || this.addPlaceSaving || this.resolving) return
+    this.addPlaceSaving = true
+    this.savedPlacesError = ''
+    try {
+      const payload = {
+        name: this.addPlaceName.trim(),
+        address: location.source === 'mapPin' ? `${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}` : location.displayName,
+        placeType: this.addPlaceType,
+        latitude: location.latitude,
+        longitude: location.longitude,
+        radiusMeters: this.addPlaceRadiusMeters,
+        locationTrigger: this.locationTrigger,
+        mapPreviewUrl: this.locationMapPreview || null
+      }
+      if (this.editingSavedPlace) await this.savedPlacesService.update(this.editingSavedPlace.id, payload, this.editingSavedPlace.syncId)
+      else await this.savedPlacesService.create(payload)
+      await this.loadSavedPlaces()
+      this.placeDialogView = this.savedPlaceReturnView
+      this.editingSavedPlace = null
+      this.resetLocationState()
+    } catch {
+      this.savedPlacesError = 'Saved place could not be saved.'
+    } finally {
+      this.addPlaceSaving = false
+      this.cd.detectChanges()
+    }
+  }
+
+  placeSwipeStart(event: PointerEvent, place: LocationSavedPlace) {
+    this.placeSwipeMoved = false
+    this.placeSwipeStartPoint = { id: place.id, x: event.clientX, y: event.clientY }
+  }
+
+  placeSwipeMove(event: PointerEvent, place: LocationSavedPlace) {
+    if (!this.placeSwipeStartPoint || this.placeSwipeStartPoint.id !== place.id) return
+    const dx = event.clientX - this.placeSwipeStartPoint.x
+    const dy = event.clientY - this.placeSwipeStartPoint.y
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) this.placeSwipeMoved = true
+    if (Math.abs(dx) > 42 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      this.swipingPlaceId = place.id
+    }
+  }
+
+  async placeSwipeEnd(place: LocationSavedPlace) {
+    if (!this.placeSwipeStartPoint || this.placeSwipeStartPoint.id !== place.id) return
+    this.placeSwipeStartPoint = undefined
+    if (this.swipingPlaceId !== place.id) this.swipingPlaceId = null
+  }
+
+  cancelPlaceSwipe() {
+    this.placeSwipeStartPoint = undefined
+    this.placeSwipeMoved = true
+    this.swipingPlaceId = null
+  }
+
+  async deleteSavedPlace(place: LocationSavedPlace) {
+    this.swipingPlaceId = null
+    this.savedPlaces = this.savedPlaces.filter(item => item.id !== place.id)
+    this.cd.detectChanges()
+    try {
+      await this.savedPlacesService.delete(place.id)
+    } catch {
+      this.savedPlacesError = 'Saved place could not be deleted.'
+      await this.loadSavedPlaces()
+    }
+  }
+
+  toggleLocationTrigger() {
+    this.locationTrigger = this.locationTrigger === 'arrive' ? 'leave' : 'arrive'
+  }
+
+  setAddPlaceType(type: SavedPlaceType) {
+    this.addPlaceType = type
+    if (!this.addPlaceName.trim() && type !== 'other') {
+      this.addPlaceName = this.titleCase(type)
+    }
+  }
+
+  private suggestPlaceName(displayName: string) {
+    return displayName.split(/[,\u2022]/)[0]?.trim().slice(0, 80) || ''
+  }
+
+  private titleCase(value: string) {
+    return value.charAt(0).toUpperCase() + value.slice(1)
+  }
+
+  private loadCurrentLocation() {
+    if (this.currentLocation || typeof navigator === 'undefined' || !navigator.geolocation) {
+      return Promise.resolve()
+    }
+    if (this.keptPlugins.isAndroid) {
+      return this.reminderService.getAndroidLocationPermissionStatus().then(status => {
+        if (!status?.foregroundGranted) return
+        return this.readCurrentLocation()
+      })
+    }
+    return this.readCurrentLocation()
+  }
+
+  private readCurrentLocation(precise = false) {
+    this.currentLocationLoading = true
+    return new Promise<boolean>(resolve => {
+      navigator.geolocation.getCurrentPosition(
+        position => {
+          this.currentLocation = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude
+          }
+          this.currentLocationLoading = false
+          this.cd.detectChanges()
+          resolve(true)
+        },
+        () => {
+          this.currentLocationLoading = false
+          this.cd.detectChanges()
+          resolve(false)
+        },
+        { enableHighAccuracy: precise, maximumAge: precise ? 0 : 5 * 60 * 1000, timeout: precise ? 10000 : 4000 }
+      )
+    })
+  }
+
+  private distanceMeters(fromLat: number, fromLng: number, toLat: number, toLng: number) {
+    const toRad = (value: number) => value * Math.PI / 180
+    const earthRadiusMeters = 6371000
+    const dLat = toRad(toLat - fromLat)
+    const dLng = toRad(toLng - fromLng)
+    const lat1 = toRad(fromLat)
+    const lat2 = toRad(toLat)
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2
+    return earthRadiusMeters * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  }
+
+  private formatDistance(meters: number) {
+    if (meters < 1000) return `${Math.max(1, Math.round(meters))} m`
+    const km = meters / 1000
+    return `${km < 10 ? Number(km.toFixed(1)) : Math.round(km)} km`
+  }
+
+  private async hydrateLocationMapPreview(location: ResolvedLocation) {
+    if (this.showLocationMap) { this.locationMapCenter = location; return }
+    try {
+      const preview = await this.keptPlugins.locationMapPreview(location) || ''
+      if (this.resolvedLocation === location) this.locationMapPreview = preview
+    } catch {
+      this.locationMapPreview = ''
+    } finally {
+      this.cd.detectChanges()
+    }
+  }
+
+  private showReminderSaveError() {
+    try {
+      Snackbar.show({ pos: 'bottom-left', text: "Reminder couldn't be saved", duration: 3500 })
+    } catch {}
+  }
+
+  private showNoteSaveError() {
+    try {
+      Snackbar.show({ pos: 'bottom-left', text: "Note couldn't be saved", duration: 3500 })
+    } catch {}
+  }
+}

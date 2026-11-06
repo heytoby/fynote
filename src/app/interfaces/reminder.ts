@@ -1,0 +1,77 @@
+export type ReminderStatus = 'pending' | 'fired' | 'dismissed' | 'snoozed';
+export type ReminderRepeatType = 'none' | 'daily' | 'weekly' | 'monthly' | 'custom_days';
+
+export interface ReminderRepeatRule {
+  type: ReminderRepeatType;
+  intervalDays?: number;
+  moveToTopOnTrigger?: boolean;
+}
+
+export interface ReminderI {
+  id: number;
+  syncId?: string;
+  noteId: number | null;
+  userId?: number;
+  scheduleVersion?: number;
+  scheduleAnchorAtUtc?: string | null;
+  managedExternally?: boolean;
+  externalRepeatRule?: unknown;
+  dueAtUtc: string | null;
+  timezone: string;
+  repeatRule: string | null;
+  status: ReminderStatus;
+  title: string | null;
+  body: string | null;
+  imageUrl: string | null;
+  locationName: string | null;
+  savedPlaceId?: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  radiusMeters: number | null;
+  locationTrigger?: 'arrive' | 'leave';
+  createdAt: string;
+  updatedAt: string;
+  lwwPhysicalMs?: number;
+  lwwLogical?: number;
+  lwwDeviceId?: string;
+  lwwOperationId?: string;
+}
+
+export interface CalDavSettingsI {
+  serverUrl: string;
+  calendarUrl: string;
+  username: string;
+  enabled: boolean;
+  googleClientId?: string;
+  googleClientSecret?: string;
+}
+
+export interface IcsImportResult {
+  imported: number;
+}
+
+export interface ReminderFiredPayload {
+  reminderId: number;
+  noteId: number | null;
+  title: string | null;
+  body: string | null;
+  imageUrl?: string | null;
+  // 'sw-push' = the service-worker push handler already called showNotification
+  // (so the in-page banner should NOT fire a duplicate Notification());
+  // 'local' = fired by the in-page timer; Android's native alarm handles the
+  // system notification, while iOS/web keep their existing page delivery path.
+  source?: 'sw-push' | 'local' | 'native';
+}
+
+export interface IcsFeedI {
+  token: string;
+  url?: string;
+}
+
+export interface GoogleCalendarStatusI {
+  hasCredentials: boolean;
+  connected: boolean;
+  enabled: boolean;
+  clientId: string | null;
+  redirectUrl?: string;
+}

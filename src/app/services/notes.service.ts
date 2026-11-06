@@ -1,0 +1,1456 @@
+import { MAX_FILE_BYTES, prepareNoteImage } from '../utils/note-images';
+import { applyPersonalOrganization, projectSharedOrganization } from '../utils/shared-note-organization';
+import { attachmentMimeType } from '../utils/attachments';
+import { Injectable } from '@angular/core';
+import { Capacitor, registerPlugin } from '@capacitor/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { BehaviorSubject, firstValueFrom, Subscription } from 'rxjs';
+
+export interface LinkPreviewData {
+  title: string;
+  description: string | null;
+  image: string | null;
+  url: string;
+  domain: string;
+}
+
+export interface TakeoutImportResult {
+  imported: number;
+  skipped: number;
+  deduped?: number;
+  errors: number;
+  pinnedCount?: number;
+  total: number;
+  fieldPresence?: Record<string, number>;
+}
+
+interface NotesCardPage {
+  notes: NoteI[];
+  nextCursor: string | null;
+}
+interface NotesLoadOptions {
+  cacheBust?: boolean;
+}
+type KeptDownloadsPlugin = {
+  saveFile: (options: { filename: string; mimeType: string; base64Data: string }) => Promise<void>;
+};
+import { environment } from 'src/environments/environment';
+import { NoteAttachmentI, NoteI, UpdateKeyI } from './../interfaces/notes';
+import { AuthService } from './auth.service';
+import { ShareUserI } from '../interfaces/users';
+import { ReminderService } from './reminder.service';
+import { OfflineStoreService } from './offline-store.service';
+import { OfflineSyncService } from './offline-sync.service';
+import { UserPreferencesService } from './user-preferences.service';
+import { createUuid } from '../utils/uuid';
+
+const KeptDownloads = registerPlugin<KeptDownloadsPlugin>('KeptDownloads');
+
+@Injectable({
+  providedIn: 'root'
+})
+export class NotesService {
+  private readonly apiUrl = `${environment.apiUrl}/notes`;
+  private readonly noteWriteTimeoutMs = 5500;
+  private readonly mediaUploadTimeoutMs = 12000;
+  notesList$ = new BehaviorSubject<NoteI[] | null>(null);
+  activeEditors$ = new BehaviorSubject<{noteId: number, editors: any[]} | null>(null);
+  private realtimeSocket?: WebSocket;
+  private realtimeReconnect?: ReturnType<typeof setTimeout>;
+  private readonly authSubscription: Subscription;
+  private isLoading = false;
+  private isLoadingNextPage = false;
+  loading = false;
+  hasLoaded = false;
+  loadError = false;
+  private nextCursor: string | null = null;
+  private searchQuery = '';
+  private searchReloadTimer?: ReturnType<typeof setTimeout>;
+  private pendingLoadQuery?: string;
+  private pendingLoadWaiters: Array<() => void> = [];
+  private readonly cardPageSize = 80;
+  private shouldReconnectRealtime = false;
+  private preloadedPreviewUrls = new Set<string>();
+  private previewPreloadQueue: string[] = [];
+  private previewPreloadRunning = false;
+  private suppressedRealtimeReloads = new Map<number, number>();
+  private suppressedRealtimeCreates = new Map<string, number>();
+  private suppressNextReorderReloadUntil = 0;
+  private optimisticNotes = new Map<number, NoteI>();
+  private lastNonEmptyNotes: NoteI[] = [];
+  private visibleWorkspace = '';
+  private iosReminderRefreshTimer?: ReturnType<typeof setTimeout>;
+
+  constructor(
+    private http: HttpClient,
+    private auth: AuthService,
+    private reminders: ReminderService,
+    private offlineStore: OfflineStoreService,
+    private offlineSync: OfflineSyncService,
+    private preferences: UserPreferencesService
+  ) {
+    this.offlineSync.cacheChanged$.subscribe(() => {
+      this.publishCachedNotes(this.searchQuery).catch(console.error);
+    });
+    this.authSubscription = this.auth.accessChanges$.subscribe(user => {
+      const identity = `${this.offlineSync.partition}:${this.offlineSync.generation || ''}`;
+      if (identity !== this.visibleWorkspace) {
+        this.visibleWorkspace = identity;this.optimisticNotes.clear();this.joinedNotes.clear();this.lastNonEmptyNotes=[];
+        this.nextCursor=null;this.hasLoaded=false;this.notesList$.next(null);
+      }
+      this.disconnectRealtime();
+      if (this.auth.isLocal) {
+        this.notesList$.next(null);
+        this.load().catch(console.error);
+      } else if (user) {
+        this.connectRealtime(user.token);
+        this.publishCachedNotes(this.searchQuery).catch(console.error);
+      } else {
+        if (this.iosReminderRefreshTimer) clearTimeout(this.iosReminderRefreshTimer);
+        this.iosReminderRefreshTimer = undefined;
+        this.loading = false;
+        this.hasLoaded = false;
+        this.loadError = false;
+        this.nextCursor = null;
+        this.lastNonEmptyNotes = [];
+        this.notesList$.next(null);
+      }
+    });
+  }
+
+  async load(searchQuery = this.searchQuery, options: NotesLoadOptions = {}) {
+    if (this.offlineSync.writesLocally) {
+      await this.auth.workspace.ready;
+      this.searchQuery = searchQuery;
+      await this.publishCachedNotes(searchQuery);
+      this.loading = false; this.loadError = false;
+      if (!this.auth.isLocal) void this.offlineSync.syncNow({ bootstrapIfEmpty: true }).catch(console.error);
+      return;
+    }
+    if (this.isLoading) {
+      this.pendingLoadQuery = searchQuery;
+      return new Promise<void>(resolve => this.pendingLoadWaiters.push(resolve));
+    }
+    this.isLoading = true;
+    this.loading = true;
+    this.loadError = false;
+    try {
+      this.searchQuery = searchQuery;
+      await this.publishCachedNotes(searchQuery);
+      const requestedQuery = searchQuery;
+      const page = await this.loadCardPageWithRetry(requestedQuery, options.cacheBust);
+      if (requestedQuery !== this.searchQuery) return;
+      if (this.offlineSync.writesLocally) {await this.publishCachedNotes(this.searchQuery);return;}
+      this.nextCursor = page.nextCursor;
+      this.hasLoaded = true;
+      const notes = this.withOptimisticNotes(page.notes);
+      await this.prepareNoteImages(notes);
+      this.publishNotes(notes);
+      this.queueLinkPreviewPreload(notes);
+      notes.forEach(note => this.cacheNoteMedia(note).catch(console.error));
+      this.offlineSync.syncNow({ bootstrapIfEmpty: true }).catch(console.error);
+    } catch (error) {
+      this.loadError = !this.notesList$.value?.length;
+      if (navigator.onLine) console.error(error);
+    } finally {
+      this.isLoading = false;
+      this.loading = false;
+      if (this.pendingLoadQuery !== undefined) {
+        const pending = this.pendingLoadQuery;
+        const waiters = this.pendingLoadWaiters.splice(0);
+        this.pendingLoadQuery = undefined;
+        await this.load(pending, options).catch(console.error);
+        waiters.forEach(resolve => resolve());
+      }
+    }
+  }
+
+  private async loadCardPageWithRetry(searchQuery: string, cacheBust = false) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const params: Record<string, string> = { view: 'card', limit: String(this.cardPageSize) };
+        if (searchQuery.trim()) params['q'] = searchQuery.trim();
+        if (cacheBust) params['_'] = String(Date.now());
+        return await firstValueFrom(this.http.get<NotesCardPage>(this.apiUrl, {
+          headers: this.auth.authHeaders(),
+          params
+        }));
+      } catch (error) {
+        lastError = error;
+        if (attempt === 2 || searchQuery !== this.searchQuery) break;
+        await this.delay(250 * (attempt + 1));
+      }
+    }
+    throw lastError;
+  }
+
+  private delay(ms: number) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  setSearchQuery(query: string) {
+    const next = query || '';
+    if (next === this.searchQuery) return;
+    this.searchQuery = next;
+    if (this.searchReloadTimer) clearTimeout(this.searchReloadTimer);
+    this.searchReloadTimer = setTimeout(() => {
+      this.searchReloadTimer = undefined;
+      this.load(next).catch(console.error);
+    }, 250);
+  }
+
+  get hasMoreNotes() {
+    return !!this.nextCursor;
+  }
+
+  async loadNextPage() {
+    if (!navigator.onLine) {
+      this.nextCursor = null;
+      return;
+    }
+    if (!this.nextCursor || this.isLoading || this.isLoadingNextPage) return;
+    this.isLoadingNextPage = true;
+    try {
+      const requestedQuery = this.searchQuery;
+      const params: Record<string, string> = { view: 'card', limit: String(this.cardPageSize), cursor: this.nextCursor };
+      if (this.searchQuery.trim()) params['q'] = this.searchQuery.trim();
+      const page = await firstValueFrom(this.http.get<NotesCardPage>(this.apiUrl, {
+        headers: this.auth.authHeaders(),
+        params
+      }));
+      if (requestedQuery !== this.searchQuery) return;
+      this.nextCursor = page.nextCursor;
+      const current = this.notesList$.value || [];
+      const seen = new Set(current.map(note => note.id).filter(Boolean));
+      const merged = [...current, ...page.notes.filter(note => !note.id || !seen.has(note.id))];
+      await this.prepareNoteImages(page.notes);
+      this.publishNotes(merged);
+      this.queueLinkPreviewPreload(page.notes);
+    } finally {
+      this.isLoadingNextPage = false;
+    }
+  }
+
+  private connectRealtime(token: string) {
+    this.shouldReconnectRealtime = true;
+    const url = this.realtimeUrl();
+    console.log('[Kept WS] connecting to', url);
+    this.realtimeSocket = new WebSocket(url);
+    const socket = this.realtimeSocket;
+
+    this.realtimeSocket.onopen = () => {
+      console.log('[Kept WS] connected');
+    };
+
+    this.realtimeSocket.onerror = (event) => {
+      console.error('[Kept WS] error', event);
+    };
+
+    this.realtimeSocket.onmessage = event => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'auth-required') {
+          if (token && this.realtimeSocket === socket) socket.send(JSON.stringify({ type: 'authenticate', token }));
+          else socket.close();
+          return;
+        }
+        if (message.type === 'ready') {
+          // Replay joins after the server finishes authentication, including
+          // cookie lookup, so an early join cannot race the message handler.
+          for (const noteId of this.joinedNotes) {
+            this.realtimeSocket!.send(JSON.stringify({ type: 'join-note', noteId }));
+          }
+        }
+        if (message.type === 'notes-changed') {
+          if (message.action === 'access-revoked') {
+            this.removeNoteFromListAndCache(Number(message.noteId), String(message.syncId || '')).catch(console.error);
+            this.reminders.load().catch(console.error);
+            return;
+          }
+          if (message.action === 'reordered' && this.suppressNextReorderReloadUntil > Date.now()) {
+            this.suppressNextReorderReloadUntil = 0;
+            return;
+          }
+          if (this.shouldSuppressRealtimeCreate(message)) return;
+          if (this.consumeSuppressedRealtimeReload(message.noteId)) return;
+          this.load();
+          this.reminders.load().catch(console.error);
+        }
+        if (message.type === 'reminder-fired') this.reminders.handleFired(message);
+        if (message.type === 'presence-update') this.activeEditors$.next({ noteId: message.noteId, editors: message.activeEditors || [] });
+        if (message.type === 'global-presence') this.updateGlobalPresence(message.userId, message.online);
+        if (message.type === 'profile-updated') this.updateUserProfile(message.user);
+      } catch (error) {
+        console.log(error);
+      }
+    };
+
+    this.realtimeSocket.onclose = (event) => {
+      console.warn('[Kept WS] closed', event.code, event.reason);
+      if (this.realtimeSocket !== socket) return;
+      if (!this.shouldReconnectRealtime || !this.auth.currentUser) return;
+      this.realtimeReconnect = setTimeout(() => this.connectRealtime(this.auth.token), 2000);
+    };
+  }
+
+  private shouldSuppressRealtimeCreate(message: any) {
+    if (message?.action !== 'created' || !message.syncId) return false;
+    const syncId = String(message.syncId);
+    const expiresAt = this.suppressedRealtimeCreates.get(syncId);
+    if (!expiresAt) return false;
+    if (expiresAt <= Date.now()) {
+      this.suppressedRealtimeCreates.delete(syncId);
+      return false;
+    }
+    return true;
+  }
+
+  // Track which notes we've asked the server to count us as "present" in.
+  // The set is replayed every time the WS connects (initial connect + every
+  // reconnect) so a join issued before the WS finished handshaking, or a
+  // server restart that drops the socket, doesn't leave us invisible to
+  // collaborators.
+  private joinedNotes = new Set<number>();
+
+  joinNote(noteId: number) {
+    this.joinedNotes.add(noteId);
+    if (this.realtimeSocket?.readyState === WebSocket.OPEN) {
+      this.realtimeSocket.send(JSON.stringify({ type: 'join-note', noteId }));
+    }
+  }
+
+  leaveNote(noteId: number) {
+    this.joinedNotes.delete(noteId);
+    if (this.realtimeSocket?.readyState === WebSocket.OPEN) {
+      this.realtimeSocket.send(JSON.stringify({ type: 'leave-note', noteId }));
+    }
+  }
+
+  private updateGlobalPresence(userId: number, online: boolean) {
+    const notes = this.notesList$.value;
+    if (!notes) return;
+    let changed = false;
+    notes.forEach(note => {
+      let noteChanged = false;
+      if (note.ownerUserId === userId) {
+        if (note.ownerOnline !== online) {
+          note.ownerOnline = online;
+          noteChanged = true;
+        }
+      }
+      if (note.collaborators) {
+        note.collaborators.forEach(c => {
+          if (c.id === userId) {
+            if (c.online !== online) {
+              c.online = online;
+              noteChanged = true;
+            }
+          }
+        });
+      }
+      if (noteChanged) changed = true;
+    });
+    if (changed) this.publishNotes([...notes]);
+  }
+
+  private updateUserProfile(user: ShareUserI) {
+    if (!user?.id) return;
+    const notes = this.notesList$.value;
+    let changed = false;
+
+    if (notes) {
+      const next = notes.map(note => {
+        const { note: updated, changed: noteChanged } = this.noteWithUpdatedUserProfile(note, user);
+        if (noteChanged) changed = true;
+        return updated;
+      });
+      if (changed) this.publishNotes(next);
+    }
+
+    const activeEditors = this.activeEditors$.value;
+    if (activeEditors?.editors?.some(editor => editor.id === user.id)) {
+      this.activeEditors$.next({
+        ...activeEditors,
+        editors: activeEditors.editors.map(editor => editor.id === user.id ? {
+          ...editor,
+          username: user.username,
+          displayName: user.displayName,
+          avatarDataUrl: user.avatarDataUrl || '',
+          avatarPreset: user.avatarPreset || 'cat'
+        } : editor)
+      });
+    }
+
+    this.updateCachedUserProfile(user).catch(console.error);
+  }
+
+  private noteWithUpdatedUserProfile(note: NoteI, user: ShareUserI) {
+    let changed = false;
+    let updated = note;
+    const avatarDataUrl = user.id === this.auth.currentUser?.id ? '' : (user.avatarDataUrl || '');
+    const avatarPreset = user.avatarPreset || 'cat';
+
+    if (note.ownerUserId === user.id) {
+      updated = {
+        ...updated,
+        ownerDisplayName: user.displayName,
+        ownerUsername: user.username,
+        ownerAvatarDataUrl: avatarDataUrl,
+        ownerAvatarPreset: avatarPreset
+      };
+      changed = true;
+    }
+
+    if (note.collaborators?.some(c => c.id === user.id)) {
+      updated = {
+        ...updated,
+        collaborators: note.collaborators.map(c => c.id === user.id ? {
+          ...c,
+          username: user.username,
+          displayName: user.displayName,
+          avatarDataUrl,
+          avatarPreset
+        } : c)
+      };
+      changed = true;
+    }
+
+    return { note: updated, changed };
+  }
+
+  private async updateCachedUserProfile(user: ShareUserI) {
+    if (!this.offlineSync.partition) return;
+    const cached = await this.offlineStore.listNotes(this.offlineSync.partition);
+    await Promise.all(cached.map(async note => {
+      const result = this.noteWithUpdatedUserProfile(note, user);
+      if (result.changed) await this.offlineStore.overwriteNoteMetadata(this.offlineSync.partition, result.note);
+    }));
+  }
+
+  async deleteImage(note: NoteI, image: any, event?: Event) {
+    if (event) event.stopPropagation();
+    if (note.isCardPreview && note.id) note = await this.get(note.id);
+    note.images = (note.images || []).filter(img => img.id !== image.id);
+    await this.update(note, note.id!);
+  }
+
+  private disconnectRealtime() {
+    this.shouldReconnectRealtime = false;
+    if (this.realtimeReconnect) clearTimeout(this.realtimeReconnect);
+    this.realtimeSocket?.close();
+    this.realtimeSocket = undefined;
+  }
+
+  private realtimeUrl() {
+    if (environment.apiUrl.startsWith('http')) {
+      return `${environment.apiUrl.replace(/^http/, 'ws')}/realtime`;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}${environment.apiUrl}/realtime`;
+  }
+
+  async add(noteObj: NoteI) {
+    if (this.offlineSync.writesLocally) {
+      const value = this.canonicalizeNoteMedia({ ...noteObj, id: undefined, isCardPreview: false, syncId: noteObj.syncId || `note-${createUuid()}` });
+      const saved = await this.offlineSync.commit('note.upsert', value.syncId, value);
+      await this.load();
+      return saved.id!;
+    }
+    noteObj = this.canonicalizeNoteMedia(noteObj);
+    const pendingNote: NoteI = {
+      ...noteObj,
+      sortOrder: noteObj.sortOrder ?? Date.now()
+    };
+    this.offlineStore.ensureNoteIdentity(pendingNote);
+    if ((!navigator.onLine || this.offlineSync.isConnectionDegraded()) && this.offlineSync.partition) {
+      return this.saveLocalNewNote(pendingNote);
+    }
+    if (pendingNote.syncId) this.suppressedRealtimeCreates.set(pendingNote.syncId, Date.now() + 5000);
+    try {
+      const result = await this.withTimeout(
+        firstValueFrom(this.http.post<NoteI & { id: number }>(
+          this.apiUrl,
+          pendingNote,
+          { headers: this.auth.authHeaders() }
+        )),
+        this.noteWriteTimeoutMs
+      );
+      this.offlineSync.clearConnectionDegraded();
+      try {
+        const saved = result.sortOrder != null
+          ? { ...pendingNote, ...result }
+          : await this.get(result.id, { merge: false });
+        if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, saved);
+        await this.cacheNoteMedia(saved);
+        this.prependNotesIntoList([saved]);
+      } catch (hydrateError) {
+        console.warn('Created note, but failed to hydrate it locally; reloading notes.', hydrateError);
+        this.load(this.searchQuery, { cacheBust: true }).catch(console.error);
+      }
+      return result.id;
+    } catch (error) {
+      if (pendingNote.syncId) this.suppressedRealtimeCreates.delete(pendingNote.syncId);
+      if (this.auth.notifySessionExpired(error)) {
+        console.warn('Note was not saved because the session expired.');
+        throw error;
+      }
+      if (!this.isOfflineError(error) || !this.offlineSync.partition) {
+        console.log(error);
+        return -1;
+      }
+      this.offlineSync.markConnectionDegraded();
+      return this.saveLocalNewNote(pendingNote);
+    }
+  }
+
+  private async saveLocalNewNote(pendingNote: NoteI) {
+    if (!this.offlineSync.partition || !pendingNote.syncId) return -1;
+    let localId = -Date.now();
+    while (await this.offlineStore.getNote(this.offlineSync.partition, localId)) localId -= 1;
+    const now = new Date().toISOString();
+    const localNote: NoteI = { ...pendingNote, id: localId, createdAt: pendingNote.createdAt || now, updatedAt: now };
+    await this.offlineStore.putNote(this.offlineSync.partition, localNote);
+    await this.offlineSync.enqueue('note.upsert', localNote.syncId!, localNote);
+    this.prependNotesIntoList([localNote]);
+    return localId;
+  }
+
+  async update(object: NoteI, id: number) {
+    const existingOrganization = await this.cachedOrLoadedNote(id);
+    if (existingOrganization?.sharedOrganization) {
+      const patch: Partial<Pick<NoteI, 'labels' | 'binder'>> = {};
+      if (this.auth.currentUser?.inheritSharedLabels === false && object.labels !== undefined &&
+          JSON.stringify(object.labels) !== JSON.stringify(existingOrganization.labels)) patch.labels = object.labels;
+      if (this.auth.currentUser?.inheritSharedBinders === false && object.binder !== undefined && object.binder !== existingOrganization.binder) patch.binder = object.binder;
+      if (Object.keys(patch).length) await this.updatePersonalOrganization(existingOrganization, patch);
+      const { sharedOrganization, labels, binder, ...content } = object;
+      object = content as NoteI;
+    }
+    if (this.offlineSync.writesLocally) {
+      const existing = await this.offlineStore.getNote(this.offlineSync.partition, id);
+      if (!existing?.syncId) throw new Error('This note is unavailable on this device.');
+      const local = this.canonicalizeNoteMedia({ ...existing, ...object, sharedOrganization: existing.sharedOrganization, id, isCardPreview: false });
+      await this.offlineSync.commit('note.upsert', existing.syncId, local);
+      await this.reminders.refreshNoteContent(local);
+      await this.load();
+      return;
+    }
+    object = this.canonicalizeNoteMedia(object);
+    if (id === -1) return;
+    const existing = await this.cachedOrLoadedNote(id);
+    const local = { ...existing, ...object, id, isCardPreview: false, updatedAt: new Date().toISOString(), lastEditorUserId: this.auth.currentUser?.id } as NoteI;
+    this.offlineStore.ensureNoteIdentity(local);
+    if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, local);
+    await this.cacheNoteMedia(local);
+    this.mergeNoteIntoList(local);
+    await this.reminders.refreshNoteContent(local);
+    if (id < 0 || !navigator.onLine) {
+      await this.offlineSync.enqueue('note.upsert', local.syncId!, local);
+      return;
+    }
+    this.suppressRealtimeReload(id);
+    try {
+      await this.noteWriteWithRetry(
+        () => this.withTimeout(
+          firstValueFrom(this.http.put(`${this.apiUrl}/${id}`, object, { headers: this.auth.authHeaders() })),
+          this.noteWriteTimeoutMs
+        ),
+        `update note ${id}`
+      );
+      this.offlineSync.clearConnectionDegraded();
+      this.mergeNoteIntoList({ ...object, id });
+      this.scheduleIosReminderRefresh(id);
+    } catch (error) {
+      this.suppressedRealtimeReloads.delete(id);
+      if (this.auth.notifySessionExpired(error)) throw error;
+      if (this.isOfflineError(error)) {
+        this.offlineSync.markConnectionDegraded();
+        await this.offlineSync.enqueue('note.upsert', local.syncId!, local);
+        return;
+      }
+      console.log(error);
+      await this.load(this.searchQuery, { cacheBust: true }).catch(console.error);
+      throw error;
+    }
+  }
+
+  async updateKey(object: UpdateKeyI, id: number) {
+    const existingOrganization = await this.cachedOrLoadedNote(id);
+    if (existingOrganization?.sharedOrganization) {
+      const patch: Partial<Pick<NoteI, 'labels' | 'binder'>> = {};
+      if (this.auth.currentUser?.inheritSharedLabels === false && object.labels !== undefined) patch.labels = object.labels;
+      if (this.auth.currentUser?.inheritSharedBinders === false && object.binder !== undefined) patch.binder = object.binder;
+      if (Object.keys(patch).length) await this.updatePersonalOrganization(existingOrganization, patch);
+      const { labels, binder, ...content } = object;
+      if (!Object.keys(content).length) return;
+      object = content;
+    }
+    if (this.offlineSync.writesLocally) return this.update(object as NoteI, id);
+    object = this.canonicalizeNoteMedia(object);
+    if (id === -1) return;
+    const existing = await this.cachedOrLoadedNote(id);
+    const local = { ...existing, ...object, id, isCardPreview: false, updatedAt: new Date().toISOString(), lastEditorUserId: this.auth.currentUser?.id } as NoteI;
+    this.offlineStore.ensureNoteIdentity(local);
+    if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, local);
+    await this.cacheNoteMedia(local);
+    this.mergeNoteIntoList(local);
+    await this.reminders.refreshNoteContent(local);
+    if (id < 0 || !navigator.onLine) {
+      await this.offlineSync.enqueue('note.upsert', local.syncId!, local);
+      return;
+    }
+    this.suppressRealtimeReload(id);
+    try {
+      await this.noteWriteWithRetry(
+        () => this.withTimeout(
+          firstValueFrom(this.http.patch(`${this.apiUrl}/${id}`, object, { headers: this.auth.authHeaders() })),
+          this.noteWriteTimeoutMs
+        ),
+        `update note fields ${id}`
+      );
+      this.offlineSync.clearConnectionDegraded();
+      this.mergeNoteIntoList({ ...object, id } as NoteI);
+      this.scheduleIosReminderRefresh(id);
+    } catch (error) {
+      this.suppressedRealtimeReloads.delete(id);
+      if (this.auth.notifySessionExpired(error)) throw error;
+      if (this.isOfflineError(error)) {
+        this.offlineSync.markConnectionDegraded();
+        await this.offlineSync.enqueue('note.upsert', local.syncId!, local);
+        return;
+      }
+      console.log(error);
+      await this.load(this.searchQuery, { cacheBust: true }).catch(console.error);
+      throw error;
+    }
+  }
+
+  private async updatePersonalOrganization(note: NoteI, patch: Partial<Pick<NoteI, 'labels' | 'binder'>>) {
+    if (!note.syncId || !note.id) throw new Error('This shared note is unavailable.');
+    if (this.offlineSync.writesLocally) {
+      await this.offlineSync.commit('note.organization', note.syncId, patch);
+      await this.load();
+      return;
+    }
+    const local = applyPersonalOrganization(note, patch);
+    if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, local);
+    this.mergeNoteIntoList(local);
+    try {
+      if (!navigator.onLine) throw new HttpErrorResponse({ status: 0 });
+      const saved = await this.withTimeout(firstValueFrom(this.http.patch<NoteI>(`${this.apiUrl}/${note.id}/organization`, patch, { headers: this.auth.authHeaders() })), this.noteWriteTimeoutMs);
+      this.offlineSync.clearConnectionDegraded();
+      if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, saved);
+      this.mergeNoteIntoList(saved);
+    } catch (error) {
+      if (this.isOfflineError(error) && this.offlineSync.partition) {
+        this.offlineSync.markConnectionDegraded();
+        await this.offlineSync.enqueue('note.organization', note.syncId, patch);
+      } else { await this.load(this.searchQuery, { cacheBust: true }); throw error; }
+    }
+  }
+
+  private async noteWriteWithRetry(write: () => Promise<unknown>, label: string) {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await write();
+      } catch (error) {
+        lastError = error;
+        if (attempt === 2 || !this.isRetryableNoteWriteError(error)) break;
+        await this.delay(350 * (attempt + 1));
+      }
+    }
+    console.warn(`Failed to ${label} after retries`, lastError);
+    throw lastError;
+  }
+
+  private isRetryableNoteWriteError(error: unknown) {
+    if (this.isRequestTimeout(error)) return false;
+    if (!(error instanceof HttpErrorResponse)) return true;
+    return error.status === 0 || error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+  }
+
+  async reorder(ids: number[]) {
+    if (this.offlineSync.writesLocally) {
+      const notes = await this.offlineStore.listNotes(this.offlineSync.partition);
+      const syncIds = ids.map(id => notes.find(note => note.id === id)?.syncId).filter(Boolean);
+      await this.offlineSync.commit('note.reorder', 'note-order', { syncIds });
+      await this.load(); return;
+    }
+    if (!ids.length) return;
+    try {
+      this.suppressNextReorderReloadUntil = Date.now() + 5000;
+      this.reorderLoadedNotes(ids);
+      await this.persistLocalOrder(ids);
+      if (!navigator.onLine || ids.some(id => id < 0)) {
+        await this.queueReorder(ids);
+        return;
+      }
+      await this.withTimeout(
+        firstValueFrom(this.http.patch(`${this.apiUrl}/reorder`, { ids }, { headers: this.auth.authHeaders() })),
+        this.noteWriteTimeoutMs
+      );
+      this.offlineSync.clearConnectionDegraded();
+    } catch (error) {
+      this.suppressNextReorderReloadUntil = 0;
+      if (this.isOfflineError(error)) {
+        this.offlineSync.markConnectionDegraded();
+        await this.queueReorder(ids);
+      }
+      else console.log(error)
+      await this.load();
+    }
+  }
+
+  private reorderLoadedNotes(ids: number[]) {
+    const current = this.notesList$.value;
+    if (!current) return;
+    const byId = new Map(current.map(note => [note.id, note]));
+    const ordered = ids.map(id => byId.get(id)).filter((note): note is NoteI => !!note);
+    const orderedIds = new Set(ids);
+    const remaining = current.filter(note => !note.id || !orderedIds.has(note.id));
+    this.publishNotes([...ordered, ...remaining]);
+  }
+
+  async uploadImage(file: File) {
+    const prepared = await prepareNoteImage(file, file.name);
+    file = new File([prepared.blob], prepared.name, { type: prepared.blob.type, lastModified: file.lastModified });
+    if (this.offlineSync.writesLocally) {
+      const canonical = `/__kept_local_media/${createUuid()}`;
+      if (this.auth.isLocal) await this.offlineStore.putBlob(this.offlineSync.partition, `media:${canonical}`, file);
+      else await this.offlineSync.commit('image.upload', createUuid(), {url:canonical,filename:file.name}, {blobs:[{key:`media:${canonical}`,value:file}]});
+      return { url: await this.offlineStore.offlineMediaUrl(this.offlineSync.partition, canonical), name: file.name };
+    }
+
+    const formData = new FormData();
+    formData.append('image', file);
+    if (!navigator.onLine || this.offlineSync.isConnectionDegraded()) {
+      return { url: await this.fileToDataUrl(file), name: file.name };
+    }
+    try {
+      const uploaded = await this.withTimeout(
+        firstValueFrom(this.http.post<{ url: string, name: string }>(
+          `${environment.apiUrl}/uploads/images`,
+          formData,
+          { headers: this.auth.authHeaders() }
+        )),
+        this.mediaUploadTimeoutMs
+      );
+      this.offlineSync.clearConnectionDegraded();
+      await this.auth.prepareImageUrl(uploaded.url);
+      return uploaded;
+    } catch (error) {
+      if (!this.isOfflineError(error)) throw error;
+      this.offlineSync.markConnectionDegraded();
+      return { url: await this.fileToDataUrl(file), name: file.name };
+    }
+  }
+
+  async uploadAttachment(noteId: number, file: File | Blob, filename?: string) {
+    if (file.size > MAX_FILE_BYTES) throw new Error('Attachments must be 100 MiB or smaller.');
+    if (this.offlineSync.writesLocally) {
+      const note = await this.offlineStore.getNote(this.offlineSync.partition, noteId);
+      if (!note?.syncId) throw new Error('Save the note before adding an attachment.');
+      const resolvedName = filename || (file instanceof File ? file.name : 'attachment');
+      const stored = file.slice(0,file.size,attachmentMimeType(resolvedName,file.type));
+      const syncId = `attachment-${createUuid()}`;
+      const value = await this.offlineSync.commit('attachment.upsert', syncId, {
+        noteId, noteSyncId: note.syncId, originalName: resolvedName,
+        fileSize: stored.size, mimeType: stored.type, uploadedAt: new Date().toISOString()
+      }, { blobs: [{ key: `attachment:${syncId}`, value: stored }] });
+      await this.load(); return value as unknown as NoteAttachmentI;
+    }
+    const syncId = `attachment-${createUuid()}`;
+    const note = await this.cachedOrLoadedNote(noteId);
+    const resolvedName = filename || (file instanceof File ? file.name : 'attachment');
+    const queueLocalAttachment = async () => {
+      if (!this.offlineSync.partition || !note?.syncId) throw new Error('No offline note available for attachment upload.');
+      const blobKey = createUuid();
+      const localAttachment: NoteAttachmentI = {
+        id: -Date.now(),
+        syncId,
+        noteId,
+        originalName: resolvedName,
+        fileSize: file.size,
+        mimeType: file.type || 'application/octet-stream',
+        uploadedAt: new Date().toISOString()
+      };
+      await this.offlineStore.putBlob(this.offlineSync.partition, blobKey, file);
+      await this.offlineStore.putAttachment(this.offlineSync.partition, localAttachment);
+      const updatedNote = {
+        ...note,
+        attachments: [localAttachment, ...(note.attachments || [])]
+      };
+      await this.offlineStore.putNote(this.offlineSync.partition, updatedNote);
+      this.mergeNoteIntoList(updatedNote);
+      await this.offlineSync.enqueue('attachment.upload', syncId, {
+        noteSyncId: note.syncId,
+        blobKey,
+        filename: resolvedName,
+        syncId
+      });
+      return localAttachment;
+    };
+    if ((!navigator.onLine || noteId < 0 || this.offlineSync.isConnectionDegraded()) && this.offlineSync.partition && note?.syncId) {
+      return queueLocalAttachment();
+    }
+    const formData = new FormData();
+    formData.append('file', file, resolvedName);
+    formData.append('syncId', syncId);
+    try {
+      const attachment = await this.withTimeout(
+        firstValueFrom(this.http.post<NoteAttachmentI>(
+          `${environment.apiUrl}/notes/${noteId}/attachments?syncId=${encodeURIComponent(syncId)}`,
+          formData,
+          { headers: this.auth.authHeaders() }
+        )),
+        this.mediaUploadTimeoutMs
+      );
+      this.offlineSync.clearConnectionDegraded();
+      if (this.offlineSync.partition) await this.offlineStore.putAttachment(this.offlineSync.partition, attachment);
+      return attachment;
+    } catch (error) {
+      if (!this.isOfflineError(error) || !this.offlineSync.partition || !note?.syncId) throw error;
+      this.offlineSync.markConnectionDegraded();
+      return queueLocalAttachment();
+    }
+  }
+
+  async deleteAttachment(noteId: number, attachmentId: number) {
+    if (this.offlineSync.writesLocally) {
+      const rows = await this.offlineStore.listResources<NoteAttachmentI>('attachment', this.offlineSync.partition);
+      const value = rows.find(item => item.id === attachmentId && item.noteId === noteId);
+      if (value?.syncId) await this.offlineSync.commit('attachment.delete', value.syncId, value);
+      await this.load(); return;
+    }
+    const note = await this.cachedOrLoadedNote(noteId);
+    const attachment = note?.attachments?.find(item => item.id === attachmentId);
+    if (attachment?.syncId && note && this.offlineSync.partition) {
+      await this.offlineStore.deleteAttachment(this.offlineSync.partition, attachment.syncId);
+      await this.offlineStore.putNote(this.offlineSync.partition, {
+        ...note,
+        attachments: (note.attachments || []).filter(item => item.id !== attachmentId)
+      });
+      if (await this.offlineStore.cancelPendingAttachmentUpload(this.offlineSync.partition, attachment.syncId)) return;
+    }
+    if (attachmentId < 0 || !navigator.onLine) {
+      if (attachment?.syncId) await this.offlineSync.enqueue('attachment.delete', attachment.syncId, attachment);
+      return;
+    }
+    await firstValueFrom(this.http.delete(
+      `${environment.apiUrl}/notes/${noteId}/attachments/${attachmentId}`,
+      { headers: this.auth.authHeaders() }
+    ));
+  }
+
+  async downloadAttachment(attachment: NoteAttachmentI) {
+    const cached = await this.offlineStore.getBlob(this.offlineSync.partition, `attachment:${attachment.syncId}`);
+    const blob = cached || (this.auth.isLocal ? undefined : await firstValueFrom(this.http.get(`${environment.apiUrl}/attachments/${attachment.id}`, {
+      headers:this.auth.authHeaders(),responseType:'blob'
+    })));
+    if (blob && !cached && this.offlineSync.partition) await this.offlineStore.putBlob(this.offlineSync.partition, `attachment:${attachment.syncId}`,blob);
+    if (!blob) throw new Error('This attachment is not stored on this device.');
+    const filename = attachment.originalName || 'attachment';
+    if (await this.tryNativeDownload(blob, filename, attachment.mimeType)) return;
+    this.browserDownloadBlob(blob, filename);
+  }
+
+  canUseNativeDownloads() {
+    return Capacitor.getPlatform() === 'android';
+  }
+
+  async downloadImage(src: string, filename?: string) {
+    const blob = await this.auth.fetchMediaBlob(src);
+    const resolvedFilename = this.imageDownloadFilename(filename, src, blob.type);
+    if (await this.tryNativeDownload(blob, resolvedFilename, blob.type || 'image/png')) return;
+    this.browserDownloadBlob(blob, resolvedFilename);
+  }
+
+  private async tryNativeDownload(blob: Blob, filename: string, mimeType?: string) {
+    if (!this.canUseNativeDownloads()) return false;
+    try {
+      await KeptDownloads.saveFile({
+        filename,
+        mimeType: mimeType || blob.type || 'application/octet-stream',
+        base64Data: await this.blobToBase64(blob)
+      });
+      return true;
+    } catch (error) {
+      console.warn('Native download unavailable; falling back to browser download.', error);
+      return false;
+    }
+  }
+
+  private browserDownloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  private blobToBase64(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('Could not read file.'));
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        resolve(result.includes(',') ? result.split(',')[1] : result);
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  private imageDownloadFilename(filename: string | undefined, src: string, mimeType: string) {
+    const clean = String(filename || '').trim();
+    if (clean && /\.[a-z0-9]{2,8}$/i.test(clean)) return clean;
+    const fromUrl = this.filenameFromUrl(src);
+    if (fromUrl) return fromUrl;
+    const ext = this.extensionFromMimeType(mimeType);
+    return `${clean || 'kept-image'}.${ext}`;
+  }
+
+  private filenameFromUrl(src: string) {
+    try {
+      const url = new URL(src, window.location.origin);
+      const filename = decodeURIComponent(url.pathname.split('/').pop() || '').trim();
+      return filename && /\.[a-z0-9]{2,8}$/i.test(filename) ? filename : '';
+    } catch {
+      return '';
+    }
+  }
+
+  private extensionFromMimeType(mimeType: string) {
+    const type = String(mimeType || '').toLowerCase();
+    if (type.includes('jpeg') || type.includes('jpg')) return 'jpg';
+    if (type.includes('webp')) return 'webp';
+    if (type.includes('gif')) return 'gif';
+    if (type.includes('svg')) return 'svg';
+    return 'png';
+  }
+
+  async get(id: number, options: { merge?: boolean } = {}) {
+    if (this.offlineSync.writesLocally) {
+      const note = await this.offlineStore.getNote(this.offlineSync.partition, id);
+      if (!note) throw new Error('This note has not been downloaded to this device.');
+      return this.hydrateOfflineNoteMedia(projectSharedOrganization(note, this.auth.currentUser || {}));
+    }
+    if (id !== -1) {
+      if (id < 0 || !navigator.onLine) {
+        const cached = this.offlineSync.partition ? await this.offlineStore.getNote(this.offlineSync.partition, id) : undefined;
+        if (cached) return this.hydrateOfflineNoteMedia(projectSharedOrganization(cached, this.auth.currentUser || {}));
+      }
+      try {
+        const note = await firstValueFrom(this.http.get<NoteI>(`${this.apiUrl}/${id}`, { headers: this.auth.authHeaders() }));
+        if (this.offlineSync.partition) await this.offlineStore.putNote(this.offlineSync.partition, note);
+        await this.prepareNoteImages([note]);
+        await this.cacheNoteMedia(note);
+        await this.reminders.refreshNoteContent(note);
+        if (options.merge !== false) this.mergeNoteIntoList(note);
+        return note;
+      } catch (error) {
+        const cached = this.offlineSync.partition ? await this.offlineStore.getNote(this.offlineSync.partition, id) : undefined;
+        if (cached) return this.hydrateOfflineNoteMedia(projectSharedOrganization(cached, this.auth.currentUser || {}));
+        throw error;
+      }
+    } else return {} as NoteI
+  }
+
+  async ensureNotesVisible(ids: number[]) {
+    const uniqueIds = [...new Set(ids.map(id => Number(id)).filter(id => Number.isFinite(id) && id > 0))];
+    if (!uniqueIds.length) return;
+    const notes = await Promise.all(uniqueIds.map(id => this.get(id, { merge: false }).catch(error => {
+      console.error(error);
+      return null;
+    })));
+    const visibleNotes = notes.filter((note): note is NoteI => !!note?.id);
+    visibleNotes.forEach(note => this.optimisticNotes.set(note.id!, note));
+    this.prependNotesIntoList(visibleNotes);
+  }
+
+  private prependNotesIntoList(notes: NoteI[]) {
+    if (!notes.length) return;
+    const currentValue = this.notesList$.value || [];
+    const current = currentValue.length ? currentValue : this.lastNonEmptyNotes;
+    const incomingIds = new Set(notes.map(note => note.id).filter(Boolean));
+    const next = [
+      ...notes,
+      ...current.filter(note => !note.id || !incomingIds.has(note.id))
+    ];
+    this.publishNotes(next);
+    this.queueLinkPreviewPreload(notes);
+  }
+
+  private publishNotes(notes: NoteI[]) {
+    notes = notes.map(note => projectSharedOrganization(note, this.auth.currentUser || {}));
+    if (notes.length) this.lastNonEmptyNotes = notes;
+    this.reminders.updateNoteLifecycle(notes);
+    this.notesList$.next(notes);
+  }
+
+  private withOptimisticNotes(notes: NoteI[]) {
+    if (!this.optimisticNotes.size) return notes;
+    const seen = new Set(notes.map(note => note.id).filter(Boolean));
+    for (const id of [...this.optimisticNotes.keys()]) {
+      if (seen.has(id)) this.optimisticNotes.delete(id);
+    }
+    const missing = [...this.optimisticNotes.values()].filter(note => note.id && !seen.has(note.id));
+    return missing.length ? [...missing, ...notes] : notes;
+  }
+
+  private mergeNoteIntoList(note: NoteI) {
+    const current = this.notesList$.value;
+    if (!current || !note.id) return;
+    const index = current.findIndex(item => item.id === note.id);
+    if (index < 0) return;
+    const existing = current[index];
+    const attachments = note.attachments ?? existing.attachments;
+    const collaborators = note.collaborators?.length ? note.collaborators : existing.collaborators;
+    const next = [...current];
+    next[index] = {
+      ...existing,
+      ...note,
+      attachments,
+      collaborators,
+      hasAttachments: !!(attachments?.length || existing.hasAttachments),
+      attachmentCount: attachments?.length ?? existing.attachmentCount,
+      searchText: existing.searchText,
+      isCardPreview: note.isCardPreview ?? (note.noteBody !== undefined ? false : existing.isCardPreview)
+    };
+    this.publishNotes(next);
+  }
+
+  private async removeNoteFromListAndCache(noteId: number, syncId = '') {
+    const current = this.notesList$.value || [];
+    const note = current.find(item => item.id === noteId);
+    const noteSyncId = syncId || note?.syncId || '';
+    this.reminders.markNoteInactive(noteId);
+    this.optimisticNotes.delete(noteId);
+    this.joinedNotes.delete(noteId);
+    if (noteSyncId && this.offlineSync.partition) {
+      await this.offlineStore.deleteNote(this.offlineSync.partition, noteSyncId);
+    }
+    const next = current.filter(item => item.id !== noteId);
+    if (next.length !== current.length) this.publishNotes(next);
+    if (this.lastNonEmptyNotes.length) {
+      this.lastNonEmptyNotes = this.lastNonEmptyNotes.filter(item => item.id !== noteId);
+    }
+  }
+
+  private suppressRealtimeReload(noteId: number) {
+    this.suppressedRealtimeReloads.set(noteId, Date.now() + 5000);
+  }
+
+  private consumeSuppressedRealtimeReload(noteId: number) {
+    const id = Number(noteId);
+    const expiresAt = this.suppressedRealtimeReloads.get(id);
+    if (!expiresAt) return false;
+    this.suppressedRealtimeReloads.delete(id);
+    return expiresAt > Date.now();
+  }
+
+  private scheduleIosReminderRefresh(noteId: number) {
+    if (Capacitor.getPlatform() !== 'ios' || !navigator.onLine || !this.reminders.getActiveForNote(noteId)) return;
+    if (this.iosReminderRefreshTimer) clearTimeout(this.iosReminderRefreshTimer);
+    this.iosReminderRefreshTimer = setTimeout(() => {
+      this.iosReminderRefreshTimer = undefined;
+      this.reminders.load().catch(console.error);
+    }, 500);
+  }
+
+  async getAll() {
+    if (this.offlineSync.writesLocally) return this.offlineStore.listNotes(this.offlineSync.partition);
+    try {
+      const notes = await firstValueFrom(this.http.get<NoteI[]>(this.apiUrl, { headers: this.auth.authHeaders() }));
+      await this.prepareNoteImages(notes);
+      if (this.offlineSync.partition) {
+        for (const note of notes) {
+          await this.offlineStore.putNote(this.offlineSync.partition, note);
+          await this.cacheNoteMedia(note);
+        }
+      }
+      return notes;
+    } catch (error) {
+      if (this.offlineSync.partition) return this.offlineStore.listNotes(this.offlineSync.partition);
+      throw error;
+    }
+  }
+
+  async listShareUsers() {
+    if (this.auth.isLocal) return [];
+    return await firstValueFrom(this.http.get<ShareUserI[]>(`${environment.apiUrl}/sharing/users`, { headers: this.auth.authHeaders() }));
+  }
+
+  async getCollaborators(id: number) {
+    if (this.auth.isLocal) return [];
+    if (id !== -1) {
+      return await firstValueFrom(this.http.get<ShareUserI[]>(`${this.apiUrl}/${id}/collaborators`, { headers: this.auth.authHeaders() }));
+    } else return []
+  }
+
+  async rejoin(noteId: number, userId: number) {
+    await firstValueFrom(this.http.post(`${this.apiUrl}/${noteId}/collaborators/rejoin`, { userId }, { headers: this.auth.authHeaders() }));
+    this.load();
+  }
+
+  async updateCollaborators(id: number, userIds: number[]) {
+    if (this.auth.isLocal) throw new Error('Connect to a server to share notes.');
+    if (id !== -1) {
+      const users = await firstValueFrom(this.http.put<ShareUserI[]>(
+        `${this.apiUrl}/${id}/collaborators`,
+        { userIds },
+        { headers: this.auth.authHeaders() }
+      ));
+      this.mergeCollaboratorsIntoList(id, users);
+      this.load().catch(console.error);
+      return users;
+    } else return []
+  }
+
+  async updateViewState(id: number, state: { completedChecklistCollapsed?: boolean }) {
+    if (this.offlineSync.writesLocally) return this.updateKey(state, id);
+    if (id < 0 || !navigator.onLine) return
+    await firstValueFrom(this.http.patch(
+      `${this.apiUrl}/${id}/view-state`,
+      state,
+      { headers: this.auth.authHeaders() }
+    ));
+  }
+
+  private mergeCollaboratorsIntoList(id: number, collaborators: ShareUserI[]) {
+    const current = this.notesList$.value;
+    if (!current) return;
+    const index = current.findIndex(note => note.id === id);
+    if (index < 0) return;
+    const next = [...current];
+    next[index] = { ...next[index], collaborators };
+    this.publishNotes(next);
+  }
+
+  async clone(id: number) {
+    if (this.offlineSync.writesLocally) {
+      const original = await this.get(id);
+      const attachments = original.attachments || [];
+      const copies = [];
+      for (const attachment of attachments) {
+        let blob = await this.offlineStore.getBlob(this.offlineSync.partition,`attachment:${attachment.syncId}`);
+        if (!blob && !this.auth.isLocal && navigator.onLine) blob = await firstValueFrom(this.http.get(`${environment.apiUrl}/attachments/${attachment.id}`,{headers:this.auth.authHeaders(),responseType:'blob'}));
+        if (!blob) throw new Error('Download this note’s attachments before making an offline copy.');
+        copies.push({attachment,blob});
+      }
+      const copyId = await this.add({ ...original, id: undefined, syncId: undefined, attachments: [], collaborators: [], noteTitle: original.noteTitle });
+      for (const {attachment,blob} of copies) await this.uploadAttachment(copyId,blob,attachment.originalName);
+      return;
+    }
+    if (id !== -1) {
+      try {
+        await firstValueFrom(this.http.post(`${this.apiUrl}/${id}/clone`, {}, { headers: this.auth.authHeaders() }));
+        await this.load();
+      } catch (error) {
+        console.log(error)
+      }
+    }
+  }
+
+  async merge(orderedIds: number[]): Promise<number | null> {
+    try {
+      const result = await firstValueFrom(
+        this.http.post<{ id: number }>(`${this.apiUrl}/merge`, { orderedIds }, { headers: this.auth.authHeaders() })
+      );
+      await Promise.all([
+        this.load(),
+        this.reminders.load()
+      ]);
+      return result?.id ?? null;
+    } catch (error: any) {
+      console.log(error);
+      throw error;
+    }
+  }
+
+  private linkPreviewCache = new Map<string, Promise<LinkPreviewData>>();
+  private linkPreviewResolved = new Map<string, LinkPreviewData>();
+
+  getLinkPreview(url: string): Promise<LinkPreviewData> {
+    if (this.auth.isLocal) return Promise.resolve({ title: url, description: null, image: null, url, domain: new URL(url).hostname });
+    if (!this.preferences.value.richLinkPreviews) {
+      return Promise.reject(new Error('Rich link previews are disabled.'));
+    }
+    if (!this.linkPreviewCache.has(url)) {
+      const promise = firstValueFrom(
+        this.http.get<LinkPreviewData>(`${environment.apiUrl}/link-preview`, {
+          params: { url },
+          headers: this.auth.authHeaders()
+        })
+      );
+      this.linkPreviewCache.set(url, promise);
+      promise.then(data => this.linkPreviewResolved.set(url, data)).catch(() => undefined);
+    }
+    return this.linkPreviewCache.get(url)!;
+  }
+
+  // Synchronous lookup used by LinkPreviewComponent so it can skip rendering
+  // a loading skeleton when a preview was already preloaded.
+  peekLinkPreviewCache(url: string): LinkPreviewData | null {
+    return this.linkPreviewResolved.get(url) || null;
+  }
+
+  private queueLinkPreviewPreload(notes: NoteI[]) {
+    if (!this.preferences.value.richLinkPreviews) return;
+    // Notes arrive sorted by recency / pinned-first, so URLs from the first
+    // ~80 notes are the ones the user is about to see. Queue those first
+    // so IntersectionObserver-based fetches in the rendered LinkPreview
+    // components hit the resolved cache instead of triggering HTTP.
+    const seen = new Set<string>();
+    const prioritized: string[] = [];
+    const deferred: string[] = [];
+    notes.forEach((note, index) => {
+      if (note.linkPreviews === false) return;
+      for (const url of this.noteUrls(note)) {
+        if (seen.has(url) || this.preloadedPreviewUrls.has(url)) continue;
+        seen.add(url);
+        if (index < 80) prioritized.push(url);
+        else deferred.push(url);
+      }
+    });
+    const urls = prioritized.concat(deferred);
+    if (!urls.length) return;
+    urls.forEach(url => this.preloadedPreviewUrls.add(url));
+    this.previewPreloadQueue.push(...urls);
+    if (this.previewPreloadRunning) return;
+    this.previewPreloadRunning = true;
+    // Kick off immediately — no 250ms delay. The frontend has already
+    // painted whatever it can without these previews; getting them back
+    // ASAP just lets the cards fill in faster.
+    queueMicrotask(() => this.preloadLinkPreviews());
+  }
+
+  private async preloadLinkPreviews() {
+    // Run a small pool of fetches in parallel. The browser caps connections
+    // per origin, so 6 is a safe sweet spot — enough to keep the pipeline
+    // full without exhausting the server thread on cold-cache scrapes.
+    const concurrency = 6;
+    const workers: Promise<void>[] = [];
+    const next = async () => {
+      while (this.previewPreloadQueue.length) {
+        const url = this.previewPreloadQueue.shift()!;
+        await this.getLinkPreview(url).catch(() => undefined);
+      }
+    };
+    try {
+      for (let i = 0; i < concurrency; i++) workers.push(next());
+      await Promise.all(workers);
+    } finally {
+      this.previewPreloadRunning = false;
+    }
+  }
+
+  private noteUrls(note: NoteI) {
+    const plainBody = String(note.noteBody || '').replace(/<[^>]+>/g, ' ');
+    const matches = plainBody.match(/https?:\/\/[^\s"'<>]+/g) || [];
+    return [...new Set(matches)].slice(0, 3);
+  }
+
+  async importGoogleTakeout(file: File): Promise<TakeoutImportResult> {
+    const formData = new FormData();
+    formData.append('takeout', file);
+    const result = await firstValueFrom(
+      this.http.post<TakeoutImportResult>(`${environment.apiUrl}/import/google-takeout`, formData, {
+        headers: this.auth.authHeaders()
+      })
+    );
+    await this.load();
+    return result;
+  }
+
+  async delete(id: number) {
+    if (this.offlineSync.writesLocally) {
+      const value = await this.offlineStore.getNote(this.offlineSync.partition, id);
+      this.reminders.markNoteInactive(id);
+      if (value?.syncId) await this.offlineSync.commit('note.delete', value.syncId, value);
+      await this.load(); await this.reminders.load(); return;
+    }
+    if (id !== -1) {
+      const note = await this.cachedOrLoadedNote(id);
+      this.reminders.markNoteInactive(id);
+      if (note?.syncId && this.offlineSync.partition) {
+        await this.offlineStore.deleteNote(this.offlineSync.partition, note.syncId);
+        this.publishNotes((this.notesList$.value || []).filter(item => item.id !== id));
+      }
+      if (id < 0 || !navigator.onLine) {
+        if (note?.syncId) await this.offlineSync.enqueue('note.delete', note.syncId, { id, syncId: note.syncId });
+        return;
+      }
+      try {
+        await firstValueFrom(this.http.delete(`${this.apiUrl}/${id}`, { headers: this.auth.authHeaders() }));
+        await this.load();
+      } catch (error) {
+        if (this.isOfflineError(error) && note?.syncId) {
+          await this.offlineSync.enqueue('note.delete', note.syncId, { id, syncId: note.syncId });
+        } else console.log(error)
+      }
+    }
+  }
+
+  private async publishCachedNotes(searchQuery: string) {
+    if (!this.offlineSync.partition) return;
+    const partition = this.offlineSync.partition;
+    const generation = this.offlineSync.generation;
+    const cached = await this.offlineStore.listNotes(partition);
+    if (partition !== this.offlineSync.partition || generation !== this.offlineSync.generation) return;
+    const hydrated = await Promise.all(cached.map(note => this.hydrateOfflineNoteMedia(note)));
+    if (partition !== this.offlineSync.partition || generation !== this.offlineSync.generation) return;
+    hydrated.sort((a, b) => Number(b.pinned) - Number(a.pinned) || Number(b.sortOrder || 0) - Number(a.sortOrder || 0));
+    this.nextCursor = null;
+    this.hasLoaded = true;
+    this.publishNotes(this.withOptimisticNotes(hydrated));
+  }
+
+  private async cachedOrLoadedNote(id: number) {
+    const loaded = (this.notesList$.value || []).find(note => note.id === id);
+    if (loaded && !loaded.isCardPreview) return loaded;
+    if (this.offlineSync.partition) {
+      const cached = await this.offlineStore.getNote(this.offlineSync.partition, id);
+      if (cached) return this.hydrateOfflineNoteMedia(projectSharedOrganization(cached, this.auth.currentUser || {}));
+    }
+    if (id > 0 && navigator.onLine) return this.get(id, { merge: false });
+    return loaded;
+  }
+
+  private async persistLocalOrder(ids: number[]) {
+    if (!this.offlineSync.partition) return;
+    const current = this.notesList$.value || [];
+    const byId = new Map(current.map(note => [note.id, note]));
+    const base = Date.now();
+    for (let index = 0; index < ids.length; index += 1) {
+      const note = byId.get(ids[index]);
+      if (!note) continue;
+      const updated = { ...note, sortOrder: base + ids.length - index, updatedAt: new Date().toISOString() };
+      await this.offlineStore.putNote(this.offlineSync.partition, updated);
+    }
+  }
+
+  private async queueReorder(ids: number[]) {
+    const syncIds = (this.notesList$.value || [])
+      .filter(note => ids.includes(note.id || 0) && note.syncId)
+      .sort((a, b) => ids.indexOf(a.id!) - ids.indexOf(b.id!))
+      .map(note => note.syncId!);
+    if (!syncIds.length) return;
+    await this.offlineSync.enqueue('note.reorder', `order-${this.auth.currentUser?.id || 0}`, { syncIds });
+  }
+
+  private isOfflineError(error: unknown) {
+    // iOS reports failed native requests as -1, even if onLine remains true.
+    return !navigator.onLine || this.isRequestTimeout(error) ||
+      (error instanceof HttpErrorResponse && [-1, 0].includes(error.status));
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_resolve, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error('Request timed out.');
+            error.name = 'KeptRequestTimeout';
+            reject(error);
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private isRequestTimeout(error: unknown) {
+    return error instanceof Error && error.name === 'KeptRequestTimeout';
+  }
+
+  private fileToDataUrl(file: File | Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('Could not read file.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  private canonicalizeNoteMedia<T extends Partial<NoteI>>(note: T): T {
+    const result = { ...note };
+    if (typeof note.noteBody === 'string') result.noteBody = this.auth.canonicalImageHtml(note.noteBody);
+    if (Array.isArray(note.images)) result.images = note.images.map(image => ({ ...image, dataUrl: this.auth.canonicalImageUrl(image.dataUrl) }));
+    return result;
+  }
+
+  private async prepareNoteImages(notes: NoteI[]) {
+    if (this.auth.usesBrowserSession || !navigator.onLine) return;
+    const urls = new Set(notes.flatMap(note => this.noteImageUrls(note)));
+    await Promise.all([...urls].map(url => this.auth.prepareImageUrl(url).catch(() => undefined)));
+  }
+
+  private async cacheNoteMedia(note: NoteI) {
+    if (!this.offlineSync.partition || !navigator.onLine) return;
+    const urls = this.noteImageUrls(note);
+    await Promise.all(urls.map(async url => {
+      try {
+        await this.offlineStore.cacheMedia(this.offlineSync.partition, this.auth.canonicalImageUrl(url), await this.auth.prepareImageUrl(url));
+      } catch { /* Missing media must not prevent notes from syncing. */ }
+    }));
+  }
+
+  private async hydrateOfflineNoteMedia(note: NoteI) {
+    if (!this.offlineSync.partition) return note;
+    const replacements = new Map<string, string>();
+    for (const url of this.noteImageUrls(note)) {
+      const canonical = this.auth.canonicalImageUrl(url);
+      let offline = await this.offlineStore.offlineMediaUrl(this.offlineSync.partition, canonical);
+      // A cached note can arrive before its media cache has been populated.
+      // Native renderers must not briefly insert an unauthenticated HTTP URL.
+      if (!this.auth.isLocal && offline === canonical && !this.auth.usesBrowserSession && navigator.onLine) {
+        try { offline = await this.auth.prepareImageUrl(canonical); } catch {}
+      }
+      if (offline !== canonical) replacements.set(canonical, offline);
+    }
+    if (!replacements.size) return note;
+    const replace = (value: string) => {
+      let next = value || '';
+      replacements.forEach((offline, canonical) => {
+        next = next.split(canonical).join(offline);
+        next = next.split(this.auth.authenticatedImageUrl(canonical)).join(offline);
+      });
+      return next;
+    };
+    return {
+      ...note,
+      noteBody: replace(note.noteBody || ''),
+      images: (note.images || []).map(image => ({ ...image, dataUrl: replace(image.dataUrl) }))
+    };
+  }
+
+  private noteImageUrls(note: NoteI) {
+    const urls = new Set((note.images || []).map(image => image.dataUrl).filter(Boolean));
+    for (const match of String(note.noteBody || '').matchAll(/<img[^>]+src=["']([^"']+)["']/gi)) {
+      if (match[1]) urls.add(match[1]);
+    }
+    return [...urls].filter(url => !url.startsWith('data:') && !url.startsWith('blob:'));
+  }
+
+  async updateAllLabels(labelId: number, labelValue: string) {
+    try {
+      await firstValueFrom(this.http.patch(
+        `${this.apiUrl}/labels/${labelId}`,
+        { name: labelValue },
+        { headers: this.auth.authHeaders() }
+      ));
+      await this.load();
+    } catch (error) {
+      console.log(error)
+    }
+  }
+}
