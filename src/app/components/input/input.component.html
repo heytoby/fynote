@@ -4,7 +4,7 @@
   <input #attachmentInput class="attachment-input" type="file" [accept]="attachmentAccept" multiple
     (change)="attachmentInputChange($event)">
   <div #notePlaceholder (click)="notePhClick()" (dragover)="dragOverImages($event)" (drop)="dropImages($event)" class="placeholder">
-    <input class="input" placeholder="Take a note…" type="text">
+    <input class="input" [placeholder]="'Take a note…' | uiText:'写一条笔记…'"  type="text">
     <div class="check H pop" data-pop="New list" (click)="isCbox.next(true)"></div>
     <div class="paint H pop" data-pop="New note with drawing" (click)="openDrawingNote($event)"></div>
     <div class="picture H pop" data-pop="New note with image" (mousedown)="rememberBodySelection()" (click)="openImagePicker($event)"></div>
@@ -34,7 +34,7 @@
       <div #noteContainer class="drawing-editor">
         <div #noteTitle hidden></div>
         <div class="drawing-toolbar">
-          <button type="button" class="drawing-icon back" aria-label="Back" (click)="saveNote()">
+          <button type="button" class="drawing-icon back" [attr.aria-label]="'Back' | uiText:'返回'"  (click)="saveNote()">
             <span class="material-symbols-outlined">arrow_back</span>
           </button>
           <button type="button" class="drawing-icon select" [class.active]="drawingTool === 'select'" aria-label="Select"
@@ -99,7 +99,7 @@
                   <span class="bg-preview rules"></span><span>Rules</span>
                 </button>
                 <button type="button" [class.active]="drawingBackground === 'none'" (click)="setDrawingBackground('none')">
-                  <span class="bg-preview none"></span><span>None</span>
+                  <span class="bg-preview none"></span><span>{{'None' | uiText:'无'}}</span>
                 </button>
               </div>
             }
@@ -115,7 +115,7 @@
             <span class="material-symbols-outlined">fullscreen</span>
           </button>
           <div class="drawing-tool-menu">
-            <button type="button" class="drawing-icon more" aria-label="More" (click)="showDrawingMoreMenu = !showDrawingMoreMenu; showDrawingBackgroundMenu = false">
+            <button type="button" class="drawing-icon more" [attr.aria-label]="'More' | uiText:'更多'"  (click)="showDrawingMoreMenu = !showDrawingMoreMenu; showDrawingBackgroundMenu = false">
               <span class="material-symbols-outlined">more_vert</span>
             </button>
             @if (showDrawingMoreMenu) {
@@ -183,9 +183,9 @@
       </div>
 
       <div class="note-title-container">
-        <div [hidden]="!!noteTitle.textContent?.trim()" class="note-title ph" aria-hidden="true">Title</div>
+        <div [hidden]="!!noteTitle.textContent?.trim()" class="note-title ph" aria-hidden="true">{{'Title' | uiText:'标题'}}</div>
         <div #noteTitle (input)="onNoteTitleInput()" (paste)="pasteEvent($event)" (focus)="rememberTextHistoryTarget(noteTitle)"
-          class="note-title" contenteditable="true" role="textbox" aria-label="Title" spellcheck="true" autocomplete="off" autocorrect="off" autocapitalize="sentences" inputmode="text">
+          class="note-title" contenteditable="true" role="textbox" [attr.aria-label]="'Title' | uiText:'标题'"  spellcheck="true" autocomplete="off" autocorrect="off" autocapitalize="sentences" inputmode="text">
         </div>
       </div>
       <ng-container [ngTemplateOutlet]="imagesTemplate" [ngTemplateOutletContext]="{ placement: 'top' }">
@@ -273,11 +273,11 @@
           (click)="openTooltip(colorMenuTtBtn,colorMenuTt)">
         </div>
         <div class="image H pop" data-pop="Add image" (mousedown)="rememberBodySelection()" (click)="openImagePicker($event)"></div>
-        <div class="attachment H pop" data-pop="Attachments" (click)="openAttachmentPicker($event)"></div>
+        <div class="attachment H pop" [attr.data-pop]="'Attachments' | uiText:'附件'"  (click)="openAttachmentPicker($event)"></div>
         <div [ngClass]="isArchived ? 'unarchive' : 'archive'" class="H pop"
           (click)="isArchived = !isArchived;saveNote()"
           [attr.data-pop]="isArchived ? 'Unarchive' : 'Archive'"></div>
-        <div #moreMenuTtBtn class="more H pop" data-pop="More" (click)="openTooltip(moreMenuTtBtn,moreMenuTt)">
+        <div #moreMenuTtBtn class="more H pop" [attr.data-pop]="'More' | uiText:'更多'"  (click)="openTooltip(moreMenuTtBtn,moreMenuTt)">
         </div>
         <button type="button" class="undo pop" data-pop="Undo" aria-label="Undo"
           (mousedown)="runTextHistory('undo',$event)"></button>
@@ -291,7 +291,7 @@
           <button type="button" class="dc-confirm" (click)="confirmPendingDate()">Pick time →</button>
         </div>
       }
-      <button type="button" class="close-btn" [disabled]="!canSaveNote" (click)="saveNote()">Close</button>
+      <button type="button" class="close-btn" [disabled]="!canSaveNote" (click)="saveNote()">{{'Close' | uiText:'关闭'}}</button>
     </div>
 
     <!--? Mobile Bottom Bar -->
@@ -316,7 +316,7 @@
         <div class="mobile-icon image" (mousedown)="rememberBodySelection()" (click)="openImagePicker($event)" title="Add image">
           <div class="glyph picture"></div>
         </div>
-        <div class="mobile-icon attachment" (click)="openAttachmentPicker($event)" title="Attachments">
+        <div class="mobile-icon attachment" (click)="openAttachmentPicker($event)" [title]="'Attachments' | uiText:'附件'" >
           <div class="glyph attachment"></div>
         </div>
         <button type="button" class="mobile-icon format" [class.active]="showTextFormatting" [disabled]="!canFormatText()"
@@ -324,14 +324,14 @@
         <div class="mobile-icon check" (click)="toggleCbox()" title="Add checkboxes">
           <div class="glyph check"></div>
         </div>
-        <div #colorMenuTtBtnMobile class="mobile-icon color" (click)="openTooltip(colorMenuTtBtnMobile,colorMenuTt)" title="Background options">
+        <div #colorMenuTtBtnMobile class="mobile-icon color" (click)="openTooltip(colorMenuTtBtnMobile,colorMenuTt)" [title]="'Background options' | uiText:'背景设置'" >
           <span class="material-symbols-outlined">palette</span>
         </div>
       </div>
       <div class="timestamp">
         {{lastEditedTime || 'Edited just now'}}
       </div>
-      <div #moreMenuTtBtnMobile class="mobile-icon more" (click)="openTooltip(moreMenuTtBtnMobile,moreMenuTt)" title="More">
+      <div #moreMenuTtBtnMobile class="mobile-icon more" (click)="openTooltip(moreMenuTtBtnMobile,moreMenuTt)" [title]="'More' | uiText:'更多'" >
         <span class="material-symbols-outlined">more_vert</span>
       </div>
     </div>
@@ -382,22 +382,22 @@
           <span class="material-symbols-outlined rd-choice-chevron">chevron_right</span>
         </button>
       }
-      <button type="button" class="rd-choice-cancel" (click)="cancelReminderType()">Cancel</button>
+      <button type="button" class="rd-choice-cancel" (click)="cancelReminderType()">{{'Cancel' | uiText:'取消'}}</button>
     </div>
   }
   @if (showReminderDateDialog && !getActiveReminder()) {
     <div class="reminder-date-dialog" (mousedown)="$event.stopPropagation()" (click)="$event.stopPropagation()"
-      role="dialog" aria-label="Set reminder date">
+      role="dialog" [attr.aria-label]="'Set reminder date' | uiText:'设置提醒日期'" >
       <div class="rd-title">
         Set reminder
       </div>
       <div class="rd-calendar" aria-label="Reminder date calendar">
         <div class="rd-calendar-head">
-          <button type="button" class="rd-nav" aria-label="Previous month" (click)="shiftCalendarMonth(-1)">
+          <button type="button" class="rd-nav" [attr.aria-label]="'Previous month' | uiText:'上个月'"  (click)="shiftCalendarMonth(-1)">
             <span class="material-symbols-outlined">chevron_left</span>
           </button>
           <div class="rd-month">{{calendarMonthLabel()}}</div>
-          <button type="button" class="rd-nav" aria-label="Next month" (click)="shiftCalendarMonth(1)">
+          <button type="button" class="rd-nav" [attr.aria-label]="'Next month' | uiText:'下个月'"  (click)="shiftCalendarMonth(1)">
             <span class="material-symbols-outlined">chevron_right</span>
           </button>
         </div>
@@ -448,7 +448,7 @@
         </label>
       </div>
       <div class="rd-actions">
-        <button type="button" class="rd-secondary" (click)="cancelReminderDate()">Cancel</button>
+        <button type="button" class="rd-secondary" (click)="cancelReminderDate()">{{'Cancel' | uiText:'取消'}}</button>
         <button type="button" class="rd-primary" [disabled]="!customDate" (click)="confirmReminderDate(customTimeInp)">Pick time</button>
       </div>
     </div>
@@ -459,7 +459,7 @@
     <div class="reminder-date-dialog reminder-place-dialog" [class.location-map-open]="showLocationMap" (mousedown)="$event.stopPropagation()" (click)="$event.stopPropagation()"
       role="dialog" aria-label="Set location reminder">
       <div class="rd-place-header">
-        <button type="button" class="rd-place-back" aria-label="Back" [disabled]="addPlaceSaving"
+        <button type="button" class="rd-place-back" [attr.aria-label]="'Back' | uiText:'返回'"  [disabled]="addPlaceSaving"
           (click)="backFromPlaceDialog()">
           <span class="material-symbols-outlined">chevron_left</span>
         </button>
@@ -507,7 +507,7 @@
           <p class="rd-location-message">{{ savedPlacesError }}</p>
         }
         <div class="rd-place-actions">
-          <button type="button" class="rd-place-cancel" (click)="clearLocation()">Cancel</button>
+          <button type="button" class="rd-place-cancel" (click)="clearLocation()">{{'Cancel' | uiText:'取消'}}</button>
           <button type="button" class="rd-place-save" (click)="openSearchPlace(true); resolveLocation('search')" [disabled]="resolving || !locationPhrase.trim()">
             {{ resolving ? 'Searching...' : 'Find place' }}
           </button>
@@ -523,7 +523,7 @@
         <div class="rd-place-manage-list">
           @for (place of visibleSavedPlaces(); track place.id) {
             <div class="rd-place-swipe" [class.deleting]="swipingPlaceId === place.id">
-              <button type="button" class="rd-place-delete-bg" (click)="deleteSavedPlace(place)">Delete</button>
+              <button type="button" class="rd-place-delete-bg" (click)="deleteSavedPlace(place)">{{'Delete' | uiText:'删除'}}</button>
               <button type="button" class="rd-place-row manage-row"
                 (click)="openEditSavedPlace(place)"
                 (pointerdown)="placeSwipeStart($event, place)"
@@ -640,7 +640,7 @@
         }
 
         <div class="rd-place-actions">
-          <button type="button" class="rd-place-cancel" [disabled]="addPlaceSaving" (click)="placeDialogView === 'search' ? openPlaceChooser() : cancelSavedPlace()">Cancel</button>
+          <button type="button" class="rd-place-cancel" [disabled]="addPlaceSaving" (click)="placeDialogView === 'search' ? openPlaceChooser() : cancelSavedPlace()">{{'Cancel' | uiText:'取消'}}</button>
           @if (placeDialogView === 'add') {
             <button type="button" class="rd-place-save" (click)="saveSavedPlace()" [disabled]="addPlaceSaving || resolving || !resolvedLocation || !addPlaceName.trim()">
               {{ addPlaceSaving ? 'Saving...' : editingSavedPlace ? 'Save changes' : 'Save place' }}
@@ -772,7 +772,7 @@
     [attr.aria-pressed]="markdownSourceMode" [title]="markdownSourceMode ? '切换到预览模式' : '切换到 Markdown 源码模式'">
     {{markdownSourceMode ? '预览' : 'MD'}}
   </button>
-  <div [hidden]="markdownSourceMode || noteBody.innerHTML.length" class="note-body ph">Take a note…</div>
+  <div [hidden]="markdownSourceMode || noteBody.innerHTML.length" class="note-body ph">{{'Take a note…' | uiText:'写一条笔记…'}}</div>
   <div #noteBody (input)="onNoteBodyInput(noteBody)" (paste)="pasteEvent($event)" (focus)="rememberTextHistoryTarget(noteBody)"
     (click)="onNoteBodyClick($event)" (contextmenu)="downloadInlineImage($event)"
     class="note-body" [hidden]="markdownSourceMode" contenteditable="true" spellcheck="true" autocomplete="off" autocorrect="off" autocapitalize="sentences" inputmode="text">
@@ -900,11 +900,11 @@
   </div>
   <div #labelMenuBtn
     (click)="this.Shared.closeTooltip(moreMenuTt);openTooltip(moreMenuTtBtn!.nativeElement,labelMenuTt)">
-    Add label
+    {{'Add label' | uiText:'添加标签'}}
   </div>
   <div
     (click)="this.Shared.closeTooltip(moreMenuTt);this.Shared.closeTooltip(labelMenuTt);openTooltip(moreMenuTtBtn!.nativeElement,binderMenuTt)">
-    Move to binder
+    {{'Move to binder' | uiText:'移动到文件夹'}}
   </div>
   <!-- <div [hidden]="moreMenuEls.drawing.disabled">{{moreMenuEls.drawing.value}}</div> -->
   <div [hidden]="moreMenuEls.copy.disabled" (click)="moreMenu(moreMenuTt).clone()">
@@ -928,13 +928,13 @@
 </div>
 <!--? binder MENU -->
 <div #binderMenuTt data-tooltip="true" data-is-tooltip-open="false" class="labelMenu binderMenu">
-  <div class="title">Move to binder</div>
+  <div class="title">{{'Move to binder' | uiText:'移动到文件夹'}}</div>
   @if (sharedOrganizationHint('binders')) {
     <p class="organization-hint">{{sharedOrganizationHint('binders')}}</p>
   }
   @if (!inheritsSharedOrganization('binders')) {
   <div class="search">
-    <input #newBinderInput type="text" maxlength="50" placeholder="Enter binder name"
+    <input #newBinderInput type="text" maxlength="50" [placeholder]="'Enter binder name' | uiText:'输入文件夹名称'"
       (keydown.enter)="addBinderFromMenu(newBinderInput); $event.preventDefault()" (blur)="addBinderFromMenu(newBinderInput)"
       (input)="binderMenuError=''">
   </div>
@@ -950,12 +950,12 @@
   <div class="label-list-container">
     <button type="button" class="label-list binder-choice" [attr.aria-current]="!binderName ? 'true' : null" (click)="selectBinder('', binderMenuTt)">
       <span class="binder-selected material-symbols-outlined" aria-hidden="true">{{!binderName ? 'check' : ''}}</span>
-      <span class="label-name">No binder</span>
+      <span class="label-name">{{'No binder' | uiText:'未归入文件夹'}}</span>
     </button>
     @for (binder of Shared.binder.list; track binder.name) {
       <button type="button" class="label-list binder-choice" [attr.aria-current]="isSelectedBinder(binder.name) ? 'true' : null" (click)="selectBinder(binder.name, binderMenuTt)">
         <span class="binder-selected material-symbols-outlined" aria-hidden="true">{{isSelectedBinder(binder.name) ? 'check' : ''}}</span>
-        <span class="label-name">{{binder.name}}</span>
+        <span class="label-name">{{folderLabel(binder.name)}}</span>
       </button>
     }
   </div>
@@ -1015,7 +1015,7 @@
     }
   </div>
     <div class="actions">
-      <button type="button" (click)="Shared.closeTooltip(collaboratorMenuTt)">Close</button>
+      <button type="button" (click)="Shared.closeTooltip(collaboratorMenuTt)">{{'Close' | uiText:'关闭'}}</button>
     </div>
 </div>
 <!--? label MENU -->
@@ -1027,7 +1027,7 @@
   @if (!inheritsSharedOrganization('labels')) {
   <div class="search">
     <div class="search-icon"></div>
-    <input #newLabelInput type="text" maxlength="50" placeholder="Enter label name"
+    <input #newLabelInput type="text" maxlength="50" [placeholder]="'Enter label name' | uiText:'输入标签名称'"
       (keydown.enter)="addLabelFromMenu(newLabelInput); $event.preventDefault()" (blur)="addLabelFromMenu(newLabelInput)"
       (input)="labelMenuError=''">
   </div>

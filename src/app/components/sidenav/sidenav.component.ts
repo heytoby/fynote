@@ -1,3 +1,4 @@
+import { folderLabel, folderLeaf, folderRows, folderSeparator, inFolder } from '../../utils/folder-path';
 import { Component, ElementRef, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { Subscription } from 'rxjs';
 import { SharedService } from 'src/app/services/shared.service';
@@ -23,11 +24,25 @@ export class NavComponent implements OnInit, OnDestroy {
 
   installHelpOpen = false;
 
-  bindersExpanded = true;
-  labelsExpanded = true;
+  bindersExpanded = false;
+  labelsExpanded = false;
   binderBusy = false;
+  binderParent = '';
+  readonly expandedFolders = new Set<string>();
+  readonly folderLabel = folderLabel;
+  readonly folderLeaf = folderLeaf;
+
+  get folders() {
+    return folderRows(this.Shared.binder.list.map(folder => folder.name), this.expandedFolders);
+  }
+
+  toggleFolder(path: string) {
+    if (this.expandedFolders.has(path)) this.expandedFolders.delete(path);
+    else this.expandedFolders.add(path);
+    this.saveExpandedFolders();
+  }
   binderEditError = '';
-  binderCreateError = 'Binder already exists';
+  binderCreateError = '同一位置已有同名文件夹';
   labelBusy = false;
   labelEditError = '';
   private subscriptions: Subscription[] = [];
@@ -122,7 +137,8 @@ export class NavComponent implements OnInit, OnDestroy {
     }
   }
 
-  openBinderModal(focusNewBinder = false) {
+  openBinderModal(focusNewBinder = false, parent = '') {
+    this.binderParent = parent;
     this.binderEditError = '';
     if (this.binderError?.nativeElement) this.binderError.nativeElement.hidden = true;
     const container = this.binderModalContainer?.nativeElement;
@@ -148,9 +164,11 @@ export class NavComponent implements OnInit, OnDestroy {
     if (!el) return
     const name = el.value.trim()
     if (!name || this.binderBusy) return
-    const exists = this.Shared.binder.list.some(binder => binder.name.toLowerCase() === name.toLowerCase())
+    if (name.includes(folderSeparator)) return;
+    const path = this.binderParent ? this.binderParent + folderSeparator + name : name;
+    const exists = this.Shared.binder.list.some(binder => binder.name.toLowerCase() === path.toLowerCase())
     if (exists) {
-      this.binderCreateError = 'Binder already exists';
+      this.binderCreateError = '同一位置已有同名文件夹';
       this.binderError.nativeElement.hidden = false
       el.focus()
       return
@@ -158,11 +176,15 @@ export class NavComponent implements OnInit, OnDestroy {
     this.binderBusy = true;
     this.binderError.nativeElement.hidden = true;
     try {
-      await this.Shared.binder.db.add(name);
+      await this.Shared.binder.db.add(path);
+      if (this.binderParent) {
+        this.expandedFolders.add(this.binderParent);
+        this.saveExpandedFolders();
+      }
       el.value = '';
       this.bindersExpanded = true;
     } catch {
-      this.binderCreateError = 'Could not create the binder. Please try again.';
+      this.binderCreateError = '无法创建文件夹，请重试。';
       this.binderError.nativeElement.hidden = false;
     } finally {
       this.binderBusy = false;
@@ -172,8 +194,26 @@ export class NavComponent implements OnInit, OnDestroy {
 
   editBinder(name: string) {
     return {
-      delete: () => this.changeBinder(() => this.Shared.binder.db.delete(name)),
-      update: (value: string) => value.trim() === name ? Promise.resolve() : this.changeBinder(() => this.Shared.binder.db.update(name, value))
+      delete: () => this.changeBinder(async () => {
+        if (this.Shared.binder.list.some(folder => folder.name !== name && inFolder(folder.name, name, true))) {
+          throw new Error('请先移出或删除子文件夹。');
+        }
+        await this.Shared.binder.db.delete(name);
+      }),
+      update: (value: string) => {
+        const leaf = value.trim();
+        if (!leaf || leaf === folderLeaf(name) || leaf.includes(folderSeparator)) return Promise.resolve();
+        return this.changeBinder(async () => {
+          const replacement = name.slice(0, name.length - folderLeaf(name).length) + leaf;
+          const names = this.Shared.binder.list.map(folder => folder.name);
+          const subtree = names.filter(path => inFolder(path, name, true));
+          if (subtree.some(path => names.some(other => !subtree.includes(other) &&
+            other.toLowerCase() === (replacement + path.slice(name.length)).toLowerCase()))) {
+            throw new Error('同一位置已有同名文件夹。');
+          }
+          for (const path of subtree) await this.Shared.binder.db.update(path, replacement + path.slice(name.length));
+        });
+      }
     }
   }
 
@@ -200,22 +240,22 @@ export class NavComponent implements OnInit, OnDestroy {
     this.binderEditError = '';
     try {
       await change();
-    } catch {
-      this.binderEditError = 'Could not save your binder changes. Please try again.';
+    } catch (error) {
+      this.binderEditError = error instanceof Error ? error.message : '文件夹更改保存失败。';
     } finally {
       this.binderBusy = false;
     }
   }
 
   toggleBinders() {
-    if (!this.Shared.binder.list.length) return;
     this.bindersExpanded = !this.bindersExpanded;
+    if (this.bindersExpanded) { this.labelsExpanded = false; this.saveSectionExpanded('labels', false); }
     this.saveSectionExpanded('binders', this.bindersExpanded);
   }
 
   toggleLabels() {
-    if (!this.Shared.label.list.length) return;
     this.labelsExpanded = !this.labelsExpanded;
+    if (this.labelsExpanded) { this.bindersExpanded = false; this.saveSectionExpanded('binders', false); }
     this.saveSectionExpanded('labels', this.labelsExpanded);
   }
 
@@ -232,11 +272,15 @@ export class NavComponent implements OnInit, OnDestroy {
 
 
   collapseSideBar() {
+    if (window.innerWidth > 700) {
+      this.bindersExpanded = this.labelsExpanded = false;
+      return;
+    }
     this.Shared.sideBarCollapsed.next(!this.Shared.sideBarCollapsed.value);
   }
 
   closeSideBarIfOpen() {
-    if (!this.Shared.sideBarCollapsed.value) this.Shared.sideBarCollapsed.next(true);
+    if (window.innerWidth <= 700 && !this.Shared.sideBarCollapsed.value) this.Shared.sideBarCollapsed.next(true);
   }
 
   onNavItemClick() {
@@ -274,6 +318,10 @@ export class NavComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    try {
+      const paths: unknown = JSON.parse(localStorage.getItem(this.sectionStorageKey('binders') + ':paths') || '[]');
+      if (Array.isArray(paths)) for (const path of paths) if (typeof path === 'string') this.expandedFolders.add(path);
+    } catch { /* The tree is still usable without saved expansion. */ }
     this.bindersExpanded = this.readSectionExpanded('binders');
     this.labelsExpanded = this.readSectionExpanded('labels');
     this.subscriptions.push(
@@ -288,13 +336,18 @@ export class NavComponent implements OnInit, OnDestroy {
     this.closeSideBarIfOpen();
   }
 
+  private saveExpandedFolders() {
+    try { localStorage.setItem(this.sectionStorageKey('binders') + ':paths', JSON.stringify([...this.expandedFolders])); }
+    catch { /* Expansion remains active for this view. */ }
+  }
+
   private sectionStorageKey(section: 'binders' | 'labels') {
     return `kept_sidebar_${section}_expanded:${this.auth.currentUser?.id || 'anon'}`;
   }
 
   private readSectionExpanded(section: 'binders' | 'labels') {
-    try { return localStorage.getItem(this.sectionStorageKey(section)) !== 'false'; }
-    catch { return true; }
+    try { return localStorage.getItem(this.sectionStorageKey(section)) === 'true'; }
+    catch { return false; }
   }
 
   private saveSectionExpanded(section: 'binders' | 'labels', expanded: boolean) {

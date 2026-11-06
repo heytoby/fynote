@@ -48,7 +48,7 @@
   </p>
 
   <div class="merge-dialog__actions">
-    <button type="button" class="merge-dialog__btn" (click)="doCancel()" [disabled]="isMerging">Cancel</button>
+    <button type="button" class="merge-dialog__btn" (click)="doCancel()" [disabled]="isMerging">{{'Cancel' | uiText:'取消'}}</button>
     <button type="button" class="merge-dialog__btn merge-dialog__btn--primary" (click)="doConfirm()" [disabled]="isMerging || notes.length < 2">
       {{ isMerging ? 'Merging…' : 'Merge ' + notes.length + ' notes' }}
     </button>

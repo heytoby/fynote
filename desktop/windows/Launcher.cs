@@ -244,6 +244,12 @@ internal static class FynoteLauncher
             string edge = Path.Combine(directory, "Microsoft", "Edge", "Application", "msedge.exe");
             if (!File.Exists(edge)) continue;
             string arguments = "--app=" + Address(port) + " --user-data-dir=\"" + Path.Combine(profile, "WebViewProfile") + "\" --no-first-run";
+            var area = Screen.PrimaryScreen.WorkingArea;
+            int width = Math.Min(1160, area.Width);
+            int height = Math.Min(820, area.Height);
+            int x = area.Left + (area.Width - width) / 2;
+            int y = area.Top + (area.Height - height) / 2;
+            arguments += " --window-size=" + width + "," + height + " --window-position=" + x + "," + y;
             Process.Start(new ProcessStartInfo(edge, arguments) { UseShellExecute = false });
             return;
         }

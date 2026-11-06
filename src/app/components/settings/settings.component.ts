@@ -1,3 +1,5 @@
+import { UiLanguage } from '../../pipes/ui-text.pipe';
+import { inject } from '@angular/core';
 import { OfflineSyncService } from 'src/app/services/offline-sync.service';
 import { WorkspaceBackupService, BACKUP_NOTICE } from 'src/app/services/workspace-backup.service';
 import { WorkspaceMigrationService } from 'src/app/services/workspace-migration.service';
@@ -50,6 +52,7 @@ export interface PermissionItem {
   standalone: false
 })
 export class SettingsComponent implements OnInit, OnDestroy {
+  readonly uiLanguage = inject(UiLanguage);
 
   // ── Global feedback ────────────────────────────────────────────────────
   error = '';

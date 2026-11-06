@@ -1,9 +1,6 @@
 <main class="auth-page welcome-page">
   <section class="auth-panel welcome-panel" aria-labelledby="welcome-title" [attr.aria-busy]="busy">
-    <div class="brand-row welcome-brand" aria-label="Kept">
-      <img class="brand-mascot" src="assets/images/keep2x.fw.png" alt="" width="64" height="77">
-      <img class="brand-wordmark" src="assets/images/keep2x_Text.png" alt="Kept" width="112" height="67">
-    </div>
+    <div class="brand-row welcome-brand" aria-label="Fynote">Fynote</div>
 
     <h1 id="welcome-title">Your notes, your way</h1>
     <p class="welcome-intro">Start on this device, or sync across all of them.</p>
@@ -14,7 +11,7 @@
         aria-labelledby="device-option-title" aria-describedby="device-option-description">
         <span class="option-icon"><span class="material-symbols-outlined" aria-hidden="true">smartphone</span></span>
         <span class="option-content">
-          <strong class="option-title" id="device-option-title">Use on this device</strong>
+          <strong class="option-title" id="device-option-title">{{'Use on this device' | uiText:'在此设备上使用'}}</strong>
           <span class="option-description" id="device-option-description">No account or server needed. Back up or move to a server later.</span>
         </span>
         <span class="material-symbols-outlined option-chevron" aria-hidden="true">chevron_right</span>
@@ -22,7 +19,7 @@
     }
 
     <section class="sync-options" aria-labelledby="sync-options-title">
-      <h2 id="sync-options-title">Sync across devices</h2>
+      <h2 id="sync-options-title">{{'Sync across devices' | uiText:'跨设备同步'}}</h2>
       <div class="sync-option-group">
         @if (managedHostingSignupEnabled && managedHostingOffering?.available) {
           <button type="button" class="welcome-option cloud-option" [disabled]="busy" (click)="startManagedHosting()"

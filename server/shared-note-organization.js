@@ -57,7 +57,7 @@ function createSharedNoteOrganization(deps) {
       if (payload[field] === undefined || compareLwwStamp(stamp, parse(previous[`${field}Stamp`], {})) < 0) continue;
       const value = field === 'labels'
         ? JSON.stringify((await normalizeLabelsForUser(userId, payload.labels)).labels.filter(label => label.added))
-        : payload.binder.trim().slice(0,80);
+        : payload.binder.trim();
       await run(`UPDATE user_note_organization SET ${field} = ?, ${field}Stamp = ? WHERE userId = ? AND noteId = ?`, [value,JSON.stringify(stamp),userId,noteId]);
       changed = true;
     }

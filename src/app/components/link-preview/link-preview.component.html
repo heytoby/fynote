@@ -11,7 +11,7 @@
 } @else {
   <div class="lp-card" [class.lp-visual]="cardMode" [class.lp-clickable]="clickToOpen"
     (click)="openCard($event)">
-    
+
     @if (!failed && preview?.image && !imageError) {
       <img class="lp-thumb" [src]="thumbnailUrl" [alt]="preview?.title"
         (error)="imageError = true">

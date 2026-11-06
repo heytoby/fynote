@@ -32,7 +32,7 @@ export class BindersService {
           for (const [index, name] of names.entries()) if (typeof name === 'string' && name.trim() && !items.some(item=>item.name.toLowerCase() === name.trim().toLowerCase())) {
             if (partition !== this.sync.partition) return;
             await this.sync.commit('binder.upsert',`binder-${createUuid()}`,{
-              name:name.trim().slice(0,80),
+              name:name.trim(),
               ...(localStorage.getItem(`${legacyKey}:custom-order`) === '1' ? { sortOrder: index } : {})
             });
           }
@@ -47,7 +47,7 @@ export class BindersService {
       (a.sortOrder ?? Infinity) - (b.sortOrder ?? Infinity) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })));
   }
   async save(name: string, oldName?: string) {
-    const clean = name.trim().slice(0, 80);
+    const clean = name.trim();
     if (!clean) throw new Error('Binder name is required.');
     const previous = this.items$.value.find(item => item.name.toLowerCase() === (oldName || name).toLowerCase());
     const ordered = this.items$.value.filter(item => item.sortOrder != null);

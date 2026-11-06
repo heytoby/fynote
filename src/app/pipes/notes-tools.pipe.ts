@@ -1,3 +1,4 @@
+import { inFolder } from '../utils/folder-path';
 import { createNoteHtmlContainer, sanitizeNoteHtml } from '../utils/note-html';
 import { Pipe, PipeTransform } from '@angular/core';
 import { NoteI } from '../interfaces/notes';
@@ -25,7 +26,7 @@ export class NotesToolsPipe implements PipeTransform {
   private noteHaystackCache = new WeakMap<NoteI, { title: string; body: string; searchText: string; cbCount: number; labelKey: string; binder: string; attachmentKey: string; haystack: string }>()
   private static normalizeEl: HTMLDivElement | null = null
 
-  transform(object: NoteI[], type: string, searchQuery = '', searchScope: 'all' | 'current' = 'all', hiddenSyncId?: string): NoteI[] {
+  transform(object: NoteI[], type: string, searchQuery = '', searchScope: 'all' | 'current' | 'descendants' = 'all', hiddenSyncId?: string): NoteI[] {
     if (hiddenSyncId) object = object.filter(note => note.syncId !== hiddenSyncId)
     let notes: NoteI[]
     const isSearching = !!searchQuery.trim()
@@ -74,7 +75,7 @@ export class NotesToolsPipe implements PipeTransform {
       const binder = type.slice('binder:'.length)
       notes = isSearching && searchScope === 'all'
         ? activeNotes
-        : activeNotes.filter(note => (note.binder || '') === binder)
+        : activeNotes.filter(note => inFolder(note.binder || '', binder, searchScope === 'descendants'))
     }
     else {
       notes = object.filter(note => !note.trashed && note.labels.some(label => label.name === type && label.added))

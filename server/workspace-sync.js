@@ -154,7 +154,8 @@ function createWorkspaceSync(deps) {
       if (id) await run(`UPDATE ${table} SET ${fields.map(key => `${key} = ?`).join(',')},updatedAt = ? WHERE id = ? AND userId = ?`, [...fields.map(key=>value[key]),now,id,userId]);
       else id=(await run(`INSERT INTO ${table}(userId,${fields.join(',')},createdAt,updatedAt) VALUES(${Array(fields.length+3).fill('?').join(',')})`, [userId,...fields.map(key=>value[key]),now,now])).id;
     } else {
-      const name = String(payload.name || '').trim().slice(0,80);
+      const rawName = String(payload.name || '').trim();
+      const name = type === 'binder' ? rawName : rawName.slice(0,80);
       if (!name) return { ok:false,error:'A name is required.' };
       if (payload.sortOrder !== undefined && payload.sortOrder !== null &&
           (!Number.isSafeInteger(payload.sortOrder) || payload.sortOrder < 0)) {

@@ -9,7 +9,7 @@
 <section class="main-section" [class.native-phone-layout]="nativePhoneLayout">
     <app-navbar></app-navbar>
     @if (auth.isLocal && showDeviceSyncInvite) {
-      <aside class="device-sync-invite" aria-label="Sync across devices">
+      <aside class="device-sync-invite" [attr.aria-label]="'Sync across devices' | uiText:'跨设备同步'" >
         <button type="button" class="device-sync-invite-link" (click)="tryDeviceSync()">
           <span class="material-symbols-outlined" aria-hidden="true">cloud</span>
           <span>Interested in syncing your notes data across all of your devices? <strong>Try Kept Cloud</strong></span>
@@ -36,13 +36,13 @@
         <app-input class="desktop-placeholder-input"></app-input>
         <app-notes></app-notes>
     </div>
-    <button class="mobile-compose-fab" type="button" aria-label="New note" (click)="openMobileComposer()">
+    <button class="mobile-compose-fab" type="button" [attr.aria-label]="'New note' | uiText:'新建笔记'"  (click)="openMobileComposer()">
       <span class="material-symbols-outlined">add</span>
     </button>
     @if (smartCaptureEntryVisible()) {
-      <button class="smart-capture-fab" type="button" aria-label="Smart Capture" (click)="startSmartCapture()">
+      <button class="smart-capture-fab" type="button" [attr.aria-label]="'Smart Capture' | uiText:'智能记录'"  (click)="startSmartCapture()">
         <span class="material-symbols-outlined">mic</span>
-        <span class="smart-capture-label">Smart Capture</span>
+        <span class="smart-capture-label">{{'Smart Capture' | uiText:'智能记录'}}</span>
       </button>
     }
     @if (isAndroidSmartCapture() && showGemmaFallbackInstallPrompt) {
@@ -50,7 +50,7 @@
         <button type="button" class="smart-gemma-main" (click)="installGemmaFallbackModel()" [disabled]="gemmaFallbackInstalling">
           <span class="material-symbols-outlined">auto_awesome</span>
           <span>
-            <strong>Smart Capture</strong>
+            <strong>{{'Smart Capture' | uiText:'智能记录'}}</strong>
             <small>Can run privately on this device with Kept’s local Gemma model.</small>
             <small class="smart-gemma-action">{{ gemmaFallbackInstalling ? 'Installing local Gemma model…' : 'Install local Gemma model' }}</small>
             @if (gemmaFallbackProgressPercent() !== null) {
@@ -64,10 +64,10 @@
       </div>
     }
     @if ((Shared.showInstallButton | async) && !Shared.isInstallFabDismissed()) {
-      <div class="mobile-install-fab" role="region" aria-label="Install Kept">
+      <div class="mobile-install-fab" role="region" [attr.aria-label]="'Install Kept' | uiText:'安装 Fynote'" >
         <button type="button" class="mobile-install-main" (click)="installPwa()">
           <span class="material-symbols-outlined">install_mobile</span>
-          <span class="label">Install App</span>
+          <span class="label">{{'Install App' | uiText:'安装应用'}}</span>
         </button>
         <button type="button" class="mobile-install-dismiss" aria-label="Dismiss"
           (click)="dismissInstallFab($event)">×</button>
@@ -80,13 +80,13 @@
   <div class="pwa-install-card" (click)="$event.stopPropagation()">
     <button class="pwa-close" type="button" aria-label="Close install instructions"
       (click)="installHelpOpen = false">×</button>
-    <h3>Install Kept</h3>
+    <h3>{{'Install Kept' | uiText:'安装 Fynote'}}</h3>
     @if (Shared.isIos) {
       <p>On iPhone or iPad, use Safari to install Kept.</p>
       <ol>
         <li>Tap the <strong>Share</strong> button in Safari's toolbar.</li>
         <li>Choose <strong>Add to Home Screen</strong>.</li>
-        <li>Tap <strong>Add</strong> to finish.</li>
+        <li>Tap <strong>{{'Add' | uiText:'添加'}}</strong> to finish.</li>
       </ol>
     } @else {
       <p>Use your browser menu to install Kept as an app.</p>
@@ -96,7 +96,7 @@
 
 @if (smartCaptureAvailable && smartCaptureOpen) {
   <section class="smart-capture-panel" [class.is-listening]="smartCaptureListening || !smartCapturePlan"
-    (click)="$event.stopPropagation()" aria-label="Smart Capture">
+    (click)="$event.stopPropagation()" [attr.aria-label]="'Smart Capture' | uiText:'智能记录'" >
     <input #smartReminderTimeInp type="text" class="timepicker-ui-input rp-hidden-time" autocomplete="off" readonly
       [(ngModel)]="smartReminderTime" aria-hidden="true" tabindex="-1">
 
@@ -256,7 +256,7 @@
                     <div class="smart-reminder-attached">
                       <span class="material-symbols-outlined">notifications</span>
                       <div>
-                        <strong>Reminder</strong>
+                        <strong>{{'Reminder' | uiText:'提醒'}}</strong>
                         <span>{{ proposalBody(reminder.action) }}</span>
                       </div>
                       @if (!smartReminderHasTrigger(reminder.action)) {
@@ -269,15 +269,15 @@
                     @if (smartReminderActionIndex === reminder.index) {
                       <div class="reminder-date-dialog smart-reminder-dialog"
                         (mousedown)="$event.stopPropagation()" (click)="$event.stopPropagation()"
-                        role="dialog" aria-label="Set reminder date">
+                        role="dialog" [attr.aria-label]="'Set reminder date' | uiText:'设置提醒日期'" >
                         <div class="rd-title">Set reminder</div>
                         <div class="rd-calendar" aria-label="Reminder date calendar">
                           <div class="rd-calendar-head">
-                            <button type="button" class="rd-nav" aria-label="Previous month" (click)="shiftCalendarMonth(-1)">
+                            <button type="button" class="rd-nav" [attr.aria-label]="'Previous month' | uiText:'上个月'"  (click)="shiftCalendarMonth(-1)">
                               <span class="material-symbols-outlined">chevron_left</span>
                             </button>
                             <div class="rd-month">{{calendarMonthLabel()}}</div>
-                            <button type="button" class="rd-nav" aria-label="Next month" (click)="shiftCalendarMonth(1)">
+                            <button type="button" class="rd-nav" [attr.aria-label]="'Next month' | uiText:'下个月'"  (click)="shiftCalendarMonth(1)">
                               <span class="material-symbols-outlined">chevron_right</span>
                             </button>
                           </div>
@@ -300,7 +300,7 @@
                           </div>
                         </div>
                         <div class="rd-actions">
-                          <button type="button" class="rd-secondary" (click)="cancelSmartReminderDate()">Cancel</button>
+                          <button type="button" class="rd-secondary" (click)="cancelSmartReminderDate()">{{'Cancel' | uiText:'取消'}}</button>
                           <button type="button" class="rd-primary" [disabled]="!smartReminderDate"
                             (click)="confirmSmartReminderDate(smartReminderTimeInp)">Pick time</button>
                         </div>
@@ -318,15 +318,15 @@
                 @if (smartReminderActionIndex === actionIndex) {
                   <div class="reminder-date-dialog smart-reminder-dialog"
                     (mousedown)="$event.stopPropagation()" (click)="$event.stopPropagation()"
-                    role="dialog" aria-label="Set reminder date">
+                    role="dialog" [attr.aria-label]="'Set reminder date' | uiText:'设置提醒日期'" >
                     <div class="rd-title">Set reminder</div>
                     <div class="rd-calendar" aria-label="Reminder date calendar">
                       <div class="rd-calendar-head">
-                        <button type="button" class="rd-nav" aria-label="Previous month" (click)="shiftCalendarMonth(-1)">
+                        <button type="button" class="rd-nav" [attr.aria-label]="'Previous month' | uiText:'上个月'"  (click)="shiftCalendarMonth(-1)">
                           <span class="material-symbols-outlined">chevron_left</span>
                         </button>
                         <div class="rd-month">{{calendarMonthLabel()}}</div>
-                        <button type="button" class="rd-nav" aria-label="Next month" (click)="shiftCalendarMonth(1)">
+                        <button type="button" class="rd-nav" [attr.aria-label]="'Next month' | uiText:'下个月'"  (click)="shiftCalendarMonth(1)">
                           <span class="material-symbols-outlined">chevron_right</span>
                         </button>
                       </div>
@@ -349,7 +349,7 @@
                       </div>
                     </div>
                     <div class="rd-actions">
-                      <button type="button" class="rd-secondary" (click)="cancelSmartReminderDate()">Cancel</button>
+                      <button type="button" class="rd-secondary" (click)="cancelSmartReminderDate()">{{'Cancel' | uiText:'取消'}}</button>
                       <button type="button" class="rd-primary" [disabled]="!smartReminderDate"
                         (click)="confirmSmartReminderDate(smartReminderTimeInp)">Pick time</button>
                     </div>
@@ -363,11 +363,11 @@
     }
 
     <div class="smart-capture-actions">
-      <button type="button" class="smart-round-action danger" aria-label="Cancel" (click)="cancelSmartCapture()">
+      <button type="button" class="smart-round-action danger" [attr.aria-label]="'Cancel' | uiText:'取消'"  (click)="cancelSmartCapture()">
         <span class="material-symbols-outlined">close</span>
       </button>
       @if (isIosSmartCapture() || isAndroidSmartCapture()) {
-        <button type="button" class="smart-round-action" aria-label="Smart Capture" (click)="toggleSmartVoiceCapture()">
+        <button type="button" class="smart-round-action" [attr.aria-label]="'Smart Capture' | uiText:'智能记录'"  (click)="toggleSmartVoiceCapture()">
           <span class="material-symbols-outlined">{{smartVoiceIcon()}}</span>
         </button>
       }

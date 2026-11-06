@@ -18,12 +18,12 @@
     [class.list-view]="Shared.noteViewType.value === 'list'"
     [ngClass]="notePreviewTextSizeClass">
     <div class="pinned-section" [hidden]="!(Shared.note.pinned | notesTools:currentPageName:Shared.searchQuery:Shared.searchScope.value:Shared.composerDraftSyncId).length">
-      <p #title _title>Pinned</p>
+      <p #title _title>{{'Pinned' | uiText:'已置顶'}}</p>
       <ng-container [ngTemplateOutlet]="noteTemplate" [ngTemplateOutletContext]="{notes:Shared.note.pinned}">
       </ng-container>
     </div>
     <div [hidden]="!(Shared.note.unpinned | notesTools:currentPageName:Shared.searchQuery:Shared.searchScope.value:Shared.composerDraftSyncId).length">
-      <p #title _title>Notes</p>
+      <p #title _title>{{'Notes' | uiText:'笔记'}}</p>
       <ng-container [ngTemplateOutlet]="noteTemplate" [ngTemplateOutletContext]="{notes:Shared.note.unpinned}">
       </ng-container>
     </div>
@@ -57,15 +57,15 @@
     (click)="cancelPendingNoteDate()"></div>
   <div class="reminder-date-dialog reminder-date-dialog--note"
     (mousedown)="$event.stopPropagation()" (click)="$event.stopPropagation()"
-    role="dialog" aria-label="Set reminder date">
+    role="dialog" [attr.aria-label]="'Set reminder date' | uiText:'设置提醒日期'" >
     <div class="rd-title">Set reminder</div>
     <div class="rd-calendar" aria-label="Reminder date calendar">
       <div class="rd-calendar-head">
-        <button type="button" class="rd-nav" aria-label="Previous month" (click)="shiftCalendarMonth(-1)">
+        <button type="button" class="rd-nav" [attr.aria-label]="'Previous month' | uiText:'上个月'"  (click)="shiftCalendarMonth(-1)">
           <span class="material-symbols-outlined">chevron_left</span>
         </button>
         <div class="rd-month">{{calendarMonthLabel()}}</div>
-        <button type="button" class="rd-nav" aria-label="Next month" (click)="shiftCalendarMonth(1)">
+        <button type="button" class="rd-nav" [attr.aria-label]="'Next month' | uiText:'下个月'"  (click)="shiftCalendarMonth(1)">
           <span class="material-symbols-outlined">chevron_right</span>
         </button>
       </div>
@@ -116,7 +116,7 @@
       </label>
     </div>
     <div class="rd-actions">
-      <button type="button" class="rd-secondary" (click)="cancelPendingNoteDate()">Cancel</button>
+      <button type="button" class="rd-secondary" (click)="cancelPendingNoteDate()">{{'Cancel' | uiText:'取消'}}</button>
       <button type="button" class="rd-primary" [disabled]="!customDate" (click)="confirmNoteDate(activePickerNote)">Pick time</button>
     </div>
   </div>
@@ -360,7 +360,7 @@
               [attr.data-pop]="note.archived ? 'Unarchive' : 'Archive'"></div>
               <div data-toolTipType="moreMenu" #moreMenuTtBtn
                 (click)="openTooltip(moreMenuTtBtn,moreMenuTt,note)" class="more H pop"
-                data-pop="More">
+                [attr.data-pop]="'More' | uiText:'更多'" >
               </div>
             </div>
           </div>
@@ -378,7 +378,7 @@
             <div class="icons">
               <div class="delete H pop" data-pop="Delete forever" (click)="$event.stopPropagation(); removeNote(note)">
               </div>
-              <div class="restore material-restore H pop" data-pop="Restore" (click)="$event.stopPropagation(); restoreNote(note.id!)">
+              <div class="restore material-restore H pop" [attr.data-pop]="'Restore' | uiText:'恢复'"  (click)="$event.stopPropagation(); restoreNote(note.id!)">
                 <span class="material-symbols-outlined">undo</span>
               </div>
             </div>
@@ -412,9 +412,9 @@
     <div (click)="moreMenu(moreMenuTt).pin(note)">{{ note.pinned ? 'Unpin note' : 'Pin note' }}</div>
   }
   <div (click)="moreMenu(moreMenuTt).trash(activeNote!)">{{ (activeNote && activeNote.ownerUserId !== auth.currentUser?.id) ? 'Unshare this with me' : 'Delete note' }}</div>
-  <div #labelMenuBtn (click)="moreMenu(moreMenuTt).openLabelMenu(labelMenuTt)">Add label
+  <div #labelMenuBtn (click)="moreMenu(moreMenuTt).openLabelMenu(labelMenuTt)">{{'Add label' | uiText:'添加标签'}}
   </div>
-  <div (click)="moreMenu(moreMenuTt).openBinderMenu(binderMenuTt,labelMenuTt)">Move to binder</div>
+  <div (click)="moreMenu(moreMenuTt).openBinderMenu(binderMenuTt,labelMenuTt)">{{'Move to binder' | uiText:'移动到文件夹'}}</div>
   <div (click)="moreMenu(moreMenuTt).clone()">Make a copy</div>
   @if (canManageActiveNoteLock() && !activeNote?.locked) {
     <div (click)="moreMenu(moreMenuTt).lock()">Lock note</div>
@@ -446,7 +446,7 @@
   @if (!inheritsSharedOrganization('labels')) {
   <div class="search">
     <div class="search-icon"></div>
-    <input #newLabelInput type="text" maxlength="50" placeholder="Enter label name"
+    <input #newLabelInput type="text" maxlength="50" [placeholder]="'Enter label name' | uiText:'输入标签名称'"
       (keydown.enter)="addLabelFromMenu(newLabelInput); $event.preventDefault()" (blur)="addLabelFromMenu(newLabelInput)"
       (input)="labelMenuError=''">
   </div>
@@ -471,13 +471,13 @@
 </div>
 <!--? binder MENU -->
 <div #binderMenuTt data-tooltip="true" data-is-tooltip-open="false" class="labelMenu binderMenu">
-  <div class="title">Move to binder</div>
+  <div class="title">{{'Move to binder' | uiText:'移动到文件夹'}}</div>
   @if (sharedOrganizationHint('binders')) {
     <p class="organization-hint">{{sharedOrganizationHint('binders')}}</p>
   }
   @if (!inheritsSharedOrganization('binders')) {
   <div class="search">
-    <input #newBinderInput type="text" maxlength="50" placeholder="Enter binder name"
+    <input #newBinderInput type="text" maxlength="50" [placeholder]="'Enter binder name' | uiText:'输入文件夹名称'"
       (keydown.enter)="addBinderFromMenu(newBinderInput); $event.preventDefault()" (blur)="addBinderFromMenu(newBinderInput)"
       (input)="binderMenuError=''">
   </div>
@@ -493,12 +493,12 @@
   <div class="label-list-container">
     <button type="button" class="label-list binder-choice" [attr.aria-current]="!binderName ? 'true' : null" (click)="setBinderFromMenu('', binderMenuTt)">
       <span class="binder-selected material-symbols-outlined" aria-hidden="true">{{!binderName ? 'check' : ''}}</span>
-      <span class="label-name">No binder</span>
+      <span class="label-name">{{'No binder' | uiText:'未归入文件夹'}}</span>
     </button>
     @for (binder of Shared.binder.list; track binder.name) {
       <button type="button" class="label-list binder-choice" [attr.aria-current]="binderName === binder.name ? 'true' : null" (click)="setBinderFromMenu(binder.name, binderMenuTt)">
         <span class="binder-selected material-symbols-outlined" aria-hidden="true">{{binderName === binder.name ? 'check' : ''}}</span>
-        <span class="label-name">{{binder.name}}</span>
+        <span class="label-name">{{folderLabel(binder.name)}}</span>
       </button>
     }
   </div>
@@ -547,7 +547,7 @@
   </div>
   @if (canManageCollaborators()) {
     <div class="actions">
-      <button type="button" (click)="Shared.closeTooltip(collaboratorMenuTt)">Close</button>
+      <button type="button" (click)="Shared.closeTooltip(collaboratorMenuTt)">{{'Close' | uiText:'关闭'}}</button>
     </div>
   }
 </div>

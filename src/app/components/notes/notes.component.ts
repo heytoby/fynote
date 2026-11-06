@@ -1,3 +1,4 @@
+import { folderLabel } from '../../utils/folder-path';
 import { isNoteImageFile } from '../../utils/note-images';
 import { OfflineSyncService } from 'src/app/services/offline-sync.service';
 import { BinderDropService } from 'src/app/services/binder-drop.service';
@@ -605,9 +606,10 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
         this.noteWidth = Math.floor((containerWidth - gutter * (numberOfColumns - 1)) / numberOfColumns)
       } else {
         this.noteWidth = 240
-        numberOfColumns = Math.floor((containerWidth + gutter) / (this.noteWidth + gutter))
+        numberOfColumns = containerWidth >= 820 ? 4 : Math.floor((containerWidth + gutter) / (this.noteWidth + gutter))
+        this.noteWidth = Math.min(240, Math.floor((containerWidth - gutter * (numberOfColumns - 1)) / numberOfColumns))
       }
-      if (centerLandscapePhoneGrid) {
+      if (centerLandscapePhoneGrid || containerWidth >= 820) {
         masonryWidth = `${numberOfColumns * this.noteWidth + Math.max(0, numberOfColumns - 1) * gutter}px`
       }
     }
@@ -626,8 +628,9 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     requestAnimationFrame(() => {
       this.noteEl.toArray().forEach(el => {
         const node = el.nativeElement
-        node.style.width = centerLandscapePhoneGrid ? masonryWidth : ''
-        node.style.marginInline = centerLandscapePhoneGrid ? 'auto' : ''
+        const centered = this.Shared.noteViewType.value === 'grid' && masonryWidth !== '0px';
+        node.style.width = centered ? masonryWidth : ''
+        node.style.marginInline = centered ? 'auto' : ''
         brikcs(node)
       })
     })
@@ -2996,6 +2999,8 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.noteCardResizeObserver.observe(card)
     }
   }
+
+  readonly folderLabel = folderLabel;
 
   ngOnInit(): void {
     this.syncCurrentPage(this.router.url)

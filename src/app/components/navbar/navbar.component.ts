@@ -1,3 +1,6 @@
+import { UiLanguage } from '../../pipes/ui-text.pipe';
+import { inject } from '@angular/core';
+import { folderLabel } from '../../utils/folder-path';
 import { Component, ElementRef, HostBinding, HostListener, OnInit, ViewChild, ChangeDetectorRef } from '@angular/core';
 import { Router } from '@angular/router';
 import { AuthService } from 'src/app/services/auth.service';
@@ -83,7 +86,7 @@ export class NavbarComponent implements OnInit {
     return this.router.url.split('?')[0].split('#')[0].startsWith('/binder/')
   }
 
-  setSearchScope(scope: 'all' | 'current') {
+  setSearchScope(scope: 'all' | 'current' | 'descendants') {
     this.Shared.setSearchScope(scope)
   }
 
@@ -579,6 +582,9 @@ export class NavbarComponent implements OnInit {
       if (event.key === this.wasdCode[0]) this.wasdIndex = 1;
     }
   }
+
+  readonly uiLanguage = inject(UiLanguage);
+  readonly folderLabel = folderLabel;
 
   ngOnInit(): void {
   }

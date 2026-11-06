@@ -1,3 +1,4 @@
+import { UiTextPipe } from './pipes/ui-text.pipe';
 import { APP_INITIALIZER, NgModule } from '@angular/core';
 import { BrowserModule } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
@@ -33,6 +34,7 @@ import { LocationMapPickerComponent } from './components/location-map-picker/loc
 
 @NgModule({ declarations: [
         AppComponent,
+        UiTextPipe,
         WelcomeComponent,
         MainComponent,
         NavComponent,

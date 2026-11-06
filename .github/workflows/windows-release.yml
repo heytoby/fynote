@@ -31,7 +31,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: node --test server/desktop-updater.test.js
+      - run: node --test server/desktop-updater.test.js scripts/folder-hierarchy.test.mjs server/workspace-sync.test.js
       - run: npm run build
       - name: Ensure Inno Setup is available
         shell: pwsh

@@ -2,8 +2,8 @@
   @if (!isLoading) {
     <section class="auth-panel">
       <div class="brand-row">
-        <img src="./assets/images/keep2x.fw.png" alt="Kept" width="49">
-        <span>Kept</span>
+
+        <span>Fynote</span>
       </div>
 
       @if (invalidInvite) {
@@ -18,16 +18,16 @@
 
         <form (ngSubmit)="submit()" #inviteForm="ngForm" class="auth-form">
           <label>
-            <span>Username</span>
+            <span>{{'Username' | uiText:'用户名'}}</span>
             <input name="username" [ngModel]="username" (ngModelChange)="onUsernameChange($event)" autocomplete="username" minlength="3" required>
             <small class="hint">Minimum 3 characters</small>
           </label>
           <label>
-            <span>Display name</span>
+            <span>{{'Display name' | uiText:'显示名称'}}</span>
             <input name="displayName" [(ngModel)]="displayName" (input)="onDisplayNameInput()" autocomplete="name" placeholder="Defaults to your username — change it to anything you'd like">
           </label>
           <label>
-            <span>Password</span>
+            <span>{{'Password' | uiText:'密码'}}</span>
             <input name="password" [(ngModel)]="password" autocomplete="new-password" type="password" minlength="8" required>
             <small class="hint">Minimum 8 characters</small>
           </label>

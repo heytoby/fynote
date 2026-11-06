@@ -891,3 +891,30 @@
   outline: 2px solid #1a73e8;
   outline-offset: -3px;
 }
+
+.main-sidebar.is-expanded {
+  width: 264px;
+  .item, .section-toggle {
+    border-radius: 8px;
+    justify-content: flex-start;
+    padding-inline: 10px;
+    width: auto;
+    gap: 8px;
+  }
+  .text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sidenav-labels-header { display: flex; align-items: center; }
+  .section-toggle { flex: 1; }
+  .edit-labels-btn { display: inline-flex; }
+  .folder-tree-row { display: flex; align-items: center; min-width: 0; }
+  .folder-tree-row .item { flex: 1; min-width: 0; }
+  .folder-action {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    flex: 0 0 24px;
+    font-size: 18px;
+    padding: 0;
+  }
+  [data-tip]::after { display: none; }
+}

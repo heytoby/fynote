@@ -102,7 +102,7 @@ export class SharedService {
 
   closeSideBar = new Subject<boolean>()
   closeSideBarIfOpen = new Subject<boolean>()
-  sideBarCollapsed = new BehaviorSubject<boolean>(true)
+  sideBarCollapsed = new BehaviorSubject<boolean>(window.innerWidth <= 700)
   openMobileComposer = new Subject<boolean>()
   widgetCreateRequested = new Subject<WidgetCreateRequest>()
   widgetComposerOpened = new Subject<WidgetCreateRequest>()
@@ -112,7 +112,7 @@ export class SharedService {
   closeModal = new Subject<boolean>()
   noteViewType = new BehaviorSubject<'list' | 'grid'>(this.initialNoteViewType())
   selectedNoteIds = new BehaviorSubject<number[]>([])
-  searchScope = new BehaviorSubject<'all' | 'current'>(this.initialSearchScope())
+  searchScope = new BehaviorSubject<'all' | 'current' | 'descendants'>(this.initialSearchScope())
   searchQuery = ''
   // Keep an autosaved inline draft out of this tab's overview until closed.
   composerDraftSyncId?: string
@@ -158,7 +158,7 @@ export class SharedService {
     this.Notes.setSearchQuery(query)
   }
 
-  setSearchScope(scope: 'all' | 'current') {
+  setSearchScope(scope: 'all' | 'current' | 'descendants') {
     this.searchScope.next(scope)
     try { localStorage.setItem('kept_search_scope', scope); } catch {}
   }
@@ -180,9 +180,10 @@ export class SharedService {
     }
   }
 
-  private initialSearchScope(): 'all' | 'current' {
+  private initialSearchScope(): 'all' | 'current' | 'descendants' {
     try {
-      return localStorage.getItem('kept_search_scope') === 'current' ? 'current' : 'all'
+      const scope = localStorage.getItem('kept_search_scope');
+      return scope === 'current' || scope === 'descendants' ? scope : 'all'
     } catch {
       return 'all'
     }

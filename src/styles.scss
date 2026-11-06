@@ -3681,3 +3681,35 @@ app-input .note-body {
   box-shadow: 0 16px 48px rgba(45, 38, 72, 0.16) !important;
 }
 
+
+body :is(.labels-container .label, .label-name, .label-chip, .is-label .text) {
+  font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-weight: 400 !important;
+}
+
+body :is(.overview-cbox-row, .cbox-row) .cbox-icon {
+  margin-top: max(0px, calc((1lh - 16px) / 2));
+}
+
+@media (min-width: 701px) {
+  body:has(.main-sidebar.is-expanded:not([hidden])) {
+    --fynote-sidebar-width: 264px;
+  }
+
+  .sidebar-backdrop { display: none; }
+}
+
+.ui-language {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 6px 8px;
+}
+
+@media (min-width: 701px) {
+  .main-section > .padding {
+    margin-inline-start: var(--fynote-sidebar-width);
+  }
+}

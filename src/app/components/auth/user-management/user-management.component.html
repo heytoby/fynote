@@ -3,10 +3,10 @@
 
     <div class="management-header">
       <div class="brand-row">
-        <img src="./assets/images/keep2x.fw.png" alt="Kept" width="49">
-        <span>Kept</span>
+
+        <span>Fynote</span>
       </div>
-      <a routerLink="/">← Back to notes</a>
+      <a routerLink="/">{{'← Back to notes' | uiText:'← 返回笔记'}}</a>
     </div>
 
     <h1>User management</h1>
@@ -56,27 +56,27 @@
       </h2>
 
       <section class="settings-section create-user-section">
-        <div class="section-title">Create account</div>
+        <div class="section-title">{{'Create account' | uiText:'创建账号'}}</div>
         <p class="section-desc">
           Provision a new user directly. They'll be active immediately — no approval step.
         </p>
 
         <form (ngSubmit)="createUser()" #userForm="ngForm" class="auth-form user-form">
           <label>
-            <span>Username</span>
+            <span>{{'Username' | uiText:'用户名'}}</span>
             <input name="username" [ngModel]="username" (ngModelChange)="onUsernameChange($event)" autocomplete="off" minlength="3" required>
             <small class="hint">Minimum 3 characters</small>
           </label>
           <label>
-            <span>Display name</span>
+            <span>{{'Display name' | uiText:'显示名称'}}</span>
             <input name="displayName" [(ngModel)]="displayName" (input)="onDisplayNameInput()" autocomplete="off" placeholder="Defaults to the username — change it to anything you'd like">
           </label>
           <label>
-            <span>Email</span>
+            <span>{{'Email' | uiText:'电子邮箱'}}</span>
             <input name="email" [(ngModel)]="email" autocomplete="off" type="email" placeholder="user&#64;example.com">
           </label>
           <label>
-            <span>Password</span>
+            <span>{{'Password' | uiText:'密码'}}</span>
             <input name="password" [(ngModel)]="password" autocomplete="new-password" type="password" minlength="8" required>
             <small class="hint">Minimum 8 characters</small>
           </label>
@@ -124,7 +124,7 @@
             @if (inviteSuccess) { <div class="success global-msg" style="margin-top: 16px;">{{inviteSuccess}}</div> }
             <form (ngSubmit)="sendInvite()" #inviteFormRef="ngForm" class="auth-form user-form" style="margin-top: 16px;">
               <label>
-                <span>Email</span>
+                <span>{{'Email' | uiText:'电子邮箱'}}</span>
                 <input name="inviteEmail" [(ngModel)]="inviteEmail" autocomplete="off" type="email" required placeholder="friend&#64;example.com">
               </label>
               <label>
@@ -192,7 +192,7 @@
                 }
 
                 <button type="button" class="btn-danger" (click)="confirmDeleteUser(user)" [disabled]="auth.currentUser?.id === user.id">
-                  Delete
+                  {{'Delete' | uiText:'删除'}}
                 </button>
               </div>
 
@@ -201,7 +201,7 @@
                   <div class="confirmation-text">Are you sure you want to delete <strong>{{user.username}}</strong>? This cannot be undone.</div>
                   <div class="confirmation-actions">
                     <button type="button" class="btn-danger" (click)="deleteUser(user)">Confirm Delete</button>
-                    <button type="button" class="btn-secondary" (click)="cancelDeleteUser()">Cancel</button>
+                    <button type="button" class="btn-secondary" (click)="cancelDeleteUser()">{{'Cancel' | uiText:'取消'}}</button>
                   </div>
                 </div>
               }
@@ -364,8 +364,8 @@
                   <span class="file-meta">{{formatSize(file.size)}} • {{file.createdAt | date:'medium'}}</span>
                 </div>
                 <div class="file-actions">
-                  <button type="button" class="btn-secondary" (click)="downloadBackup(file.filename, file.size)">Download</button>
-                  <button type="button" class="btn-danger-link" (click)="deleteBackup(file.filename)">Delete</button>
+                  <button type="button" class="btn-secondary" (click)="downloadBackup(file.filename, file.size)">{{'Download' | uiText:'下载'}}</button>
+                  <button type="button" class="btn-danger-link" (click)="deleteBackup(file.filename)">{{'Delete' | uiText:'删除'}}</button>
                 </div>
               </div>
             }

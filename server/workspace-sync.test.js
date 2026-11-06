@@ -23,6 +23,13 @@ test('protocol v2 catalog replay, ownership, tombstones, v1 compatibility and re
   assert.equal((await fixture.sql("SELECT count(*) AS n FROM labels WHERE name = 'Work'"))[0].n,1);
   assert.equal((await send([{...label,payload:{name:'Changed under same receipt'}}]))[0].ok,false);
   const binder=mutation('binder.upsert','binder',{name:'Empty Binder'});assert.equal((await send([binder]))[0].ok,true);
+  const path = Array.from({ length: 32 }, (_, index) => 'Folder ' + index).join('␟');
+  const deepBinder = mutation('binder.upsert', 'deep-binder', {name: path});
+  const deepNote = mutation('note.upsert', 'deep-note', {noteTitle:'Deep note', binder:path, labels:[]});
+  const deepResults = await send([deepBinder, deepNote]);
+  assert.ok(deepResults.every(result => result.ok));
+  assert.equal((await request('/sync/bootstrap?protocolVersion=2')).binders.find(item => item.syncId === 'deep-binder').name, path);
+  assert.equal((await fixture.sql('SELECT binder FROM notes WHERE syncId = ?', ['deep-note']))[0].binder, path);
   const aliasA=(await send([mutation('label.upsert','alias-a',{name:'Duplicate'})]))[0];
   const aliasB=(await send([mutation('label.upsert','alias-b',{name:'Duplicate'})]))[0];
   assert.equal(aliasA.id,aliasB.id);

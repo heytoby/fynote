@@ -2,73 +2,79 @@
 @if (!sidebarCollapsed) {
   <div class="sidebar-backdrop" (click)="closeSideBarIfOpen()" aria-hidden="true"></div>
 }
-<nav id="fynote-sidebar" class="main-sidebar" [hidden]="sidebarCollapsed" aria-label="Notes navigation">
+<nav id="fynote-sidebar" class="main-sidebar" [class.is-expanded]="bindersExpanded || labelsExpanded" [hidden]="sidebarCollapsed" aria-label="Notes navigation">
   <div class="sidenav-top">
-    <div [class.active]="router.url === '/'" class="item" aria-label="Notes" data-tip="笔记" routerLink="/" (click)="onNavItemClick()">
+    <div [class.active]="router.url === '/'" class="item" [attr.aria-label]="'Notes' | uiText:'笔记'"  data-tip="笔记" routerLink="/" (click)="onNavItemClick()">
       <span class="pic lamp" aria-hidden="true"></span>
-      <span class="text">Notes</span>
+      <span class="text">{{'Notes' | uiText:'笔记'}}</span>
     </div>
-    <div [class.active]="router.url === '/reminders'" class="item" aria-label="Reminders" data-tip="提醒" routerLink="/reminders" (click)="onNavItemClick()">
+    <div [class.active]="router.url === '/reminders'" class="item" [attr.aria-label]="'Reminders' | uiText:'提醒'"  data-tip="提醒" routerLink="/reminders" (click)="onNavItemClick()">
       <span class="pic reminder" aria-hidden="true"></span>
-      <span class="text">Reminders</span>
+      <span class="text">{{'Reminders' | uiText:'提醒'}}</span>
     </div>
-    <div [class.active]="router.url === '/attachments'" class="item" aria-label="Attachments" data-tip="附件" routerLink="/attachments" (click)="onNavItemClick()">
+    <div [class.active]="router.url === '/attachments'" class="item" [attr.aria-label]="'Attachments' | uiText:'附件'"  data-tip="附件" routerLink="/attachments" (click)="onNavItemClick()">
       <span class="material-pic material-symbols-outlined" aria-hidden="true">&#xe226;</span>
-      <span class="text">Attachments</span>
+      <span class="text">{{'Attachments' | uiText:'附件'}}</span>
     </div>
-    <div [hidden]="auth.isLocal" [class.active]="router.url === '/shared'" class="item" aria-label="Shared" data-tip="共享" routerLink="/shared" (click)="onNavItemClick()">
+    <div [hidden]="auth.isLocal" [class.active]="router.url === '/shared'" class="item" [attr.aria-label]="'Shared' | uiText:'共享'"  data-tip="共享" routerLink="/shared" (click)="onNavItemClick()">
       <span class="pic col" aria-hidden="true"></span>
-      <span class="text">Shared</span>
+      <span class="text">{{'Shared' | uiText:'共享'}}</span>
     </div>
   </div>
 
   <div class="sidenav-labels-header sidenav-binders-header">
-    <button type="button" class="section-toggle binder-manager-button" data-tip="新建 / 管理文件夹" (click)="openBinderModal(true)"
-      [attr.aria-expanded]="Shared.binder.list.length > 0 && bindersExpanded"
-      [attr.aria-label]="'Binders (' + Shared.binder.list.length + ')'"
+    <button type="button" class="section-toggle binder-manager-button" data-tip="文件夹" (click)="toggleBinders()"
+      [attr.aria-expanded]="bindersExpanded"
+      [attr.aria-label]="'Folders' | uiText:'文件夹'"
       aria-controls="sidebar-binders">
       <span class="material-pic material-symbols-outlined binder-section-icon" aria-hidden="true">folder_open</span>
-      <span class="material-symbols-outlined compact-add-badge" aria-hidden="true">add</span>
-      <span class="text">Binders <span class="section-count">({{Shared.binder.list.length}})</span></span>
+
+      <span class="text">{{'Folders' | uiText:'文件夹'}} <span class="section-count">({{Shared.binder.list.length}})</span></span>
       @if (Shared.binder.list.length > 0) {
         <span class="material-symbols-outlined section-chevron" [class.collapsed]="!bindersExpanded" aria-hidden="true">expand_more</span>
       }
     </button>
-    <button type="button" class="edit-labels-btn binder-add-btn H" aria-label="Add binder" title="Add binder"
+    <button type="button" class="edit-labels-btn binder-add-btn H" [attr.aria-label]="'Add binder' | uiText:'新建文件夹'"  [title]="'Add binder' | uiText:'新建文件夹'"
       (click)="openBinderModal(true)">
       <span class="material-symbols-outlined">add</span>
     </button>
-    <button type="button" class="edit-labels-btn H" aria-label="Edit binders" title="Edit binders"
+    <button type="button" class="edit-labels-btn H" [attr.aria-label]="'Edit binders' | uiText:'管理文件夹'"  [title]="'Edit binders' | uiText:'管理文件夹'"
       (click)="openBinderModal(false)">
       <span class="material-symbols-outlined">edit</span>
     </button>
   </div>
 
-  <div id="sidebar-binders" class="sidenav-binders" [hidden]="!bindersExpanded || Shared.binder.list.length === 0">
-    @for (binder of Shared.binder.list; track binder.name) {
+  <div id="sidebar-binders" class="sidenav-binders" [hidden]="!bindersExpanded">
+    @for (binder of folders; track binder.path) {
+      <div class="folder-tree-row" [style.padding-left.px]="12 * (binder.depth > 8 ? 8 : binder.depth)">
+      @if (binder.hasChildren) {
+        <button class="folder-action material-symbols-outlined" type="button" [attr.aria-expanded]="expandedFolders.has(binder.path)" aria-label="展开或折叠子文件夹" (click)="toggleFolder(binder.path)">{{expandedFolders.has(binder.path) ? 'expand_more' : 'chevron_right'}}</button>
+      }
       <div routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" class="item is-binder"
-        [attr.data-binder-drop]="binder.name"
+        [attr.data-binder-drop]="binder.path"
         (click)="onNavItemClick()"
         [title]="binder.name" [attr.aria-label]="binder.name" [attr.data-tip]="binder.name"
-        [routerLink]="['/binder', binder.name]">
+        [routerLink]="['/binder', binder.path]">
         <span class="material-pic material-symbols-outlined binder-row-icon" aria-hidden="true">folder</span>
         <span class="text">{{binder.name}}</span>
+      </div>
+      <button class="folder-action material-symbols-outlined" type="button" [attr.aria-label]="'New subfolder' | uiText:'新建子文件夹'" (click)="openBinderModal(true, binder.path)">create_new_folder</button>
       </div>
     }
   </div>
 
   <div class="sidenav-labels-header">
-    <button type="button" class="section-toggle" data-tip="新建或管理标签" (click)="openModal()"
-      [attr.aria-expanded]="Shared.label.list.length > 0 && labelsExpanded"
-      [attr.aria-label]="'Labels (' + Shared.label.list.length + ')'"
+    <button type="button" class="section-toggle" data-tip="标签" (click)="toggleLabels()"
+      [attr.aria-expanded]="labelsExpanded"
+      [attr.aria-label]="'Labels' | uiText:'标签'"
       aria-controls="sidebar-labels">
       <span class="pic label" aria-hidden="true"></span>
-      <span class="text">Labels <span class="section-count">({{Shared.label.list.length}})</span></span>
+      <span class="text">{{'Labels' | uiText:'标签'}} <span class="section-count">({{Shared.label.list.length}})</span></span>
       @if (Shared.label.list.length > 0) {
         <span class="material-symbols-outlined section-chevron" [class.collapsed]="!labelsExpanded" aria-hidden="true">expand_more</span>
       }
     </button>
-    <button type="button" class="edit-labels-btn H" aria-label="Edit labels" title="Edit labels"
+    <button type="button" class="edit-labels-btn H" [attr.aria-label]="'Edit labels' | uiText:'管理标签'"  title="管理标签"
       (click)="openModal()">
       <span class="material-symbols-outlined">edit</span>
     </button>
@@ -80,25 +86,25 @@
         (click)="onNavItemClick()" [attr.data-tip]="label.name"
         [title]="label.name" [attr.aria-label]="label.name"
         [routerLink]="['/label', label.name]">
-        <span class="pic label" aria-hidden="true"></span>
+        <span class="material-pic material-symbols-outlined" aria-hidden="true">sell</span>
         <span class="text">{{label.name}}</span>
       </div>
     }
   </div>
 
   <div class="sidenav-bottom">
-    <div [class.active]="router.url === '/archive'" class="item" aria-label="Archive" data-tip="归档" routerLink="/archive" (click)="onNavItemClick()">
+    <div [class.active]="router.url === '/archive'" class="item" [attr.aria-label]="'Archive' | uiText:'归档'"  data-tip="归档" routerLink="/archive" (click)="onNavItemClick()">
       <span class="pic archive" aria-hidden="true"></span>
-      <span class="text">Archive</span>
+      <span class="text">{{'Archive' | uiText:'归档'}}</span>
     </div>
-    <div [class.active]="router.url === '/trash'" routerLink="/trash" class="item" aria-label="Trash" data-tip="回收站" (click)="onNavItemClick()">
+    <div [class.active]="router.url === '/trash'" routerLink="/trash" class="item" [attr.aria-label]="'Trash' | uiText:'回收站'"  data-tip="回收站" (click)="onNavItemClick()">
       <span class="pic trash" aria-hidden="true"></span>
-      <span class="text">Trash</span>
+      <span class="text">{{'Trash' | uiText:'回收站'}}</span>
     </div>
     @if (auth.isAdmin) {
-      <div [class.active]="router.url === '/users'" routerLink="/users" class="item" aria-label="Users/Admin settings" data-tip="用户与管理设置" (click)="onNavItemClick()">
+      <div [class.active]="router.url === '/users'" routerLink="/users" class="item" [attr.aria-label]="'Users/Admin settings' | uiText:'用户与管理'"  data-tip="用户与管理设置" (click)="onNavItemClick()">
         <span class="pic users" aria-hidden="true"></span>
-        <span class="text">Users/Admin settings</span>
+        <span class="text">{{'Users/Admin settings' | uiText:'用户与管理'}}</span>
       </div>
     }
     <div class="item mobile-only-item" aria-label="切换外观" data-tip="切换外观" (click)="toggleTheme()">
@@ -108,17 +114,17 @@
       <span class="text">{{auth.effectiveTheme === 'light' ? 'Use dark mode' : 'Use light mode'}}</span>
     </div>
     @if (!auth.isLocal) {
-    <div class="item" aria-label="Sign out" data-tip="退出登录" (click)="logout()">
+    <div class="item" [attr.aria-label]="'Sign out' | uiText:'退出登录'"  data-tip="退出登录" (click)="logout()">
       <span class="material-pic material-symbols-outlined" aria-hidden="true">logout</span>
-      <span class="text">Sign out</span>
+      <span class="text">{{'Sign out' | uiText:'退出登录'}}</span>
     </div>
     }
   </div>
   @if (Shared.showInstallButton | async) {
     <div class="install-section">
-      <button type="button" class="install-pwa-sidenav" data-tip="安装应用" aria-label="Install App" (click)="openInstallPwa()">
+      <button type="button" class="install-pwa-sidenav" data-tip="安装应用" [attr.aria-label]="'Install App' | uiText:'安装应用'"  (click)="openInstallPwa()">
         <span class="material-symbols-outlined">install_mobile</span>
-        <span class="text">Install App</span>
+        <span class="text">{{'Install App' | uiText:'安装应用'}}</span>
       </button>
     </div>
   }
@@ -128,12 +134,12 @@
   <div #binderModal class="modal">
     <div class="label-modal-main">
       <div class="header">
-        <p>Edit binders</p>
+        <p>{{binderParent ? '新建子文件夹 · ' + folderLabel(binderParent) : '管理文件夹'}}</p>
         <div class="input-container">
           <div #binderPlusIcon class="plus-icon H" (click)="binderInput.value=''"></div>
           <input #binderInput (blur)="binderPlusIcon.classList.toggle('cancel-icon')"
             (focus)="binderPlusIcon.classList.toggle('cancel-icon')" (keydown.enter)="addBinder(binderInput)"
-            type="text" placeholder="Create new binder" maxlength="50" [disabled]="binderBusy" (input)="''">
+            type="text" [placeholder]="'New folder' | uiText:'新建文件夹'" maxlength="50" [disabled]="binderBusy" (input)="''">
           <div [style.display]="binderInput.value.length ? 'block' : 'none'" class="check-icon H"
             (click)="addBinder(binderInput)"></div>
         </div>
@@ -151,7 +157,7 @@
             <input #binderInput2 (focus)="binderIcon.classList.toggle('trash-icon')"
               (keydown.enter)="binderInput2.blur()"
               (blur)="editBinder(binder.name).update(binderInput2.value);binderIcon.classList.toggle('trash-icon')"
-              [value]="binder.name" [disabled]="binderBusy" type="text" placeholder="Enter binder name" maxlength="50">
+              [value]="folderLeaf(binder.name)" [title]="folderLabel(binder.name)" [disabled]="binderBusy" type="text" [placeholder]="'Enter binder name' | uiText:'输入文件夹名称'"  maxlength="50">
             <div class="pen-icon H" (click)="editBinder(binder.name).update(binderInput2.value)"></div>
             <button type="button" class="binder-move" [disabled]="binderBusy || index === 0"
               [attr.aria-label]="'Move ' + binder.name + ' up'" (click)="moveBinder(binder.name, -1, $event)">
@@ -165,7 +171,7 @@
         }
       </div>
       <div class="footer">
-        <div (click)="hideBinderModal()" type="submit" tabindex="0">Done</div>
+        <div (click)="hideBinderModal()" type="submit" tabindex="0">{{'Done' | uiText:'完成'}}</div>
       </div>
     </div>
   </div>
@@ -177,7 +183,7 @@
   <div class="pwa-install-card" (click)="$event.stopPropagation()">
     <button class="pwa-close" type="button" aria-label="Close install instructions"
       (click)="installHelpOpen = false">×</button>
-    <h2>Install Kept</h2>
+    <h2>{{'Install Kept' | uiText:'安装 Fynote'}}</h2>
     @if (Shared.isIos) {
       <p>On iPhone or iPad, use Safari to install Kept.</p>
       <ol>
@@ -200,16 +206,16 @@
   <div #modal class="modal">
     <div class="label-modal-main">
       <div class="header">
-        <p>Edit labels</p>
+        <p>{{'Manage labels' | uiText:'管理标签'}}</p>
         <div class="input-container">
           <div #plusIcon class="plus-icon H" (click)="labelInput.value=''"></div>
           <input #labelInput (blur)="plusIcon.classList.toggle('cancel-icon')"
             (focus)="plusIcon.classList.toggle('cancel-icon')" (keydown.enter)="addLabel(labelInput)"
-            type="text" placeholder="Create new label" maxlength="50" (input)="''">
+            type="text" placeholder="新建标签" maxlength="50" (input)="''">
           <div [style.display]="labelInput.value.length ? 'block' : 'none'" class="check-icon H"
             (click)="addLabel(labelInput)"></div>
         </div>
-        <div #labelError class="error" hidden>Label already exists</div>
+        <div #labelError class="error" hidden>{{'Label already exists' | uiText:'标签已存在'}}</div>
         @if (labelEditError) {
           <div class="error" role="alert">{{labelEditError}}</div>
         }
@@ -223,7 +229,7 @@
             <input #labelInput2 (focus)="labelIcon.classList.toggle('trash-icon')"
               (keydown.enter)="labelInput2.blur()"
               (blur)="editLabel(label.id!).update(labelInput2.value);labelIcon.classList.toggle('trash-icon')"
-              [value]="label.name" [disabled]="labelBusy" type="text" placeholder="Enter label name" maxlength="50">
+              [value]="label.name" [disabled]="labelBusy" type="text" [placeholder]="'Enter label name' | uiText:'输入标签名称'"  maxlength="50">
             <div class="pen-icon H" (click)="editLabel(label.id!).update(labelInput2.value)"></div>
             <button type="button" class="label-move" [disabled]="labelBusy || index === 0"
               [attr.aria-label]="'Move ' + label.name + ' up'" (click)="moveLabel(label.id!, -1, $event)">
@@ -237,7 +243,7 @@
         }
       </div>
       <div class="footer">
-        <div (click)="hideModal()" type="submit" tabindex="0">Done</div>
+        <div (click)="hideModal()" type="submit" tabindex="0">{{'Done' | uiText:'完成'}}</div>
       </div>
     </div>
   </div>

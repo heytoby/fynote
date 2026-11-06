@@ -1485,7 +1485,7 @@ function canonicalizeNotePayload(payload) {
     noteBody: canonicalizeNoteHtmlImages(content.noteBody),
     images: canonicalizeNoteImages(content.images),
     labels: appliedNoteLabels(payload.labels || []),
-    binder: String(payload.binder || '').trim().slice(0, 80),
+    binder: String(payload.binder || '').trim(),
     locked,
     lockSalt: locked ? String(payload.lockSalt || '').slice(0, 256) : '',
     lockHash: locked ? String(payload.lockHash || '').slice(0, 512) : ''

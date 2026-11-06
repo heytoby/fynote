@@ -215,7 +215,7 @@
     border-radius: 50%;
     box-sizing: border-box;
     content: "";
-    inset: 1px;
+    inset: 3px;
     opacity: 0.72;
     position: absolute;
   }
@@ -235,12 +235,12 @@
     border-width: 0 1.5px 1.5px 0;
     box-sizing: border-box;
     content: "";
-    height: 7px;
+    height: 5px;
     left: 6px;
     position: absolute;
-    top: 4px;
+    top: 5px;
     transform: rotate(45deg);
-    width: 4px;
+    width: 3px;
   }
 }
 

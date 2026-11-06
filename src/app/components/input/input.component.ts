@@ -1,3 +1,4 @@
+import { folderLabel } from '../../utils/folder-path';
 import { MAX_FILE_BYTES, isNoteImageFile } from '../../utils/note-images';
 import { createNoteHtmlContainer, sanitizeNoteHtml } from '../../utils/note-html';
 import { htmlToMarkdown, markdownToHtml } from '../../utils/markdown';
@@ -4015,6 +4016,8 @@ export class InputComponent implements OnInit {
       setTimeout(() => this.openImagePicker(), 0)
     }
   }
+
+  readonly folderLabel = folderLabel;
 
   ngOnInit(): void {
     if (this.isEditing && this.noteToEdit) {
