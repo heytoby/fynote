@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 const { ZipWriter, Uint8ArrayWriter, TextReader } = require('@zip.js/zip.js');
-const { compareVersion, installationRoot, installRelease, parseRelease } = require('./desktop-updater');
+const { compareVersion, installationRoot, installRelease, parseRelease, stageSetup } = require('./desktop-updater');
 
 const current = '1.9.4';
 const next = '1.9.5';
@@ -120,4 +120,20 @@ test('retrying a previously staged package reuses its verified version', async t
   await files.writeFile(path.join(root, 'current.json'), JSON.stringify({ version: current }));
   await installRelease(root, current, release, async () => new Response(bytes));
   assert.deepEqual(await selectedVersion(root), { version: next, previousVersion: current });
+});
+
+test('installed Windows updates stage only the verified release EXE', async t => {
+  const root = await installation(t);
+  const bytes = Buffer.from('installer fixture');
+  const name = 'fynote-Setup-' + next + '.exe';
+  const url = new URL(name, packageUrl).href;
+  const release = parseRelease(releaseWith(bytes, { name, browser_download_url: url }));
+  assert.equal(release.setup.url, url);
+  assert.equal(release.windows, null);
+  const destination = path.join(root, '.update', 'setup.exe');
+  await assert.rejects(stageSetup(root, release.setup, async () => new Response(Buffer.alloc(bytes.length))), /校验失败/);
+  await assert.rejects(files.stat(destination), { code: 'ENOENT' });
+  await stageSetup(root, release.setup, async () => new Response(bytes));
+  assert.deepEqual(await files.readFile(destination), bytes);
+  assert.deepEqual(await selectedVersion(root), { version: current });
 });

@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string] $OutputDirectory
+    [string] $OutputDirectory,
+    [switch] $BuildInstaller
 )
 
 $ErrorActionPreference = 'Stop'
@@ -113,6 +114,23 @@ Fynote $version · Windows x64
     [IO.Compression.ZipFile]::CreateFromDirectory($packageRoot, $temporaryArchive, [IO.Compression.CompressionLevel]::Optimal, $true)
     [IO.File]::Move($temporaryArchive, $archive)
     Write-Output $archive
+
+    if ($BuildInstaller) {
+        $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+        if (-not (Test-Path -LiteralPath $iscc)) { throw 'Inno Setup 6 is required.' }
+        $installerScript = Join-Path $projectRoot 'desktop\windows\Fynote.iss'
+        & $iscc "/DAppVersion=$version" "/DPackageRoot=$packageRoot" "/DOutputDirectory=$([IO.Path]::GetFullPath($OutputDirectory))" $installerScript
+        if ($LASTEXITCODE -ne 0) { throw "Installer compile failed ($LASTEXITCODE)." }
+
+        $installer = Join-Path $OutputDirectory "fynote-Setup-$version.exe"
+        $installProbe = Join-Path $stage 'installed'
+        $setup = Start-Process -FilePath $installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/DIR="' + $installProbe + '"')) -Wait -PassThru
+        if ($setup.ExitCode -ne 0 -or -not (Test-Path (Join-Path $installProbe 'fynote.exe'))) {
+            throw "Installer smoke test failed ($($setup.ExitCode))."
+        }
+        $installed = Get-Content -Raw -LiteralPath (Join-Path $installProbe 'current.json') | ConvertFrom-Json
+        if ($installed.version -ne $version) { throw 'Installer did not activate the packaged version.' }
+    }
 } finally {
     if ([IO.Directory]::Exists($stage) -and [IO.Path]::GetDirectoryName($stage).TrimEnd('\') -eq $tempRoot.TrimEnd('\')) {
         Remove-Item -LiteralPath $stage -Recurse -Force

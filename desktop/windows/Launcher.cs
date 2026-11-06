@@ -13,12 +13,19 @@ using System.Windows.Forms;
 internal static class FynoteLauncher
 {
     private const int RestartExitCode = 42;
+    private const int SetupExitCode = 43;
     private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
     private static readonly Regex Version = new Regex(@"^(0|[1-9]\d{0,5})(\.(0|[1-9]\d{0,5})){2}$");
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--apply-setup")
+        {
+            ApplySetup(args[1], args[2]);
+            return;
+        }
+
         string root = AppDomain.CurrentDomain.BaseDirectory;
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Kept");
         using (var mutex = new Mutex(false, @"Local\FynoteDesktop"))
@@ -73,6 +80,23 @@ internal static class FynoteLauncher
                             openWindow = false;
                         }
                         server.WaitForExit();
+                        if (server.ExitCode == SetupExitCode)
+                        {
+                            try
+                            {
+                                string helper = Path.Combine(root, ".update", "apply.exe");
+                                File.Copy(Application.ExecutablePath, helper, true);
+                                Process.Start(new ProcessStartInfo(helper,
+                                    "--apply-setup " + Process.GetCurrentProcess().Id + " " + version)
+                                { UseShellExecute = false });
+                                return;
+                            }
+                            catch (Exception error)
+                            {
+                                MessageBox.Show("无法启动更新安装程序。\n" + error.Message, "Fynote");
+                                continue;
+                            }
+                        }
                         if (server.ExitCode != RestartExitCode) break;
                     }
                 }
@@ -85,6 +109,56 @@ internal static class FynoteLauncher
             {
                 if (ownsMutex) mutex.ReleaseMutex();
             }
+        }
+    }
+
+    private static void ApplySetup(string parent, string previous)
+    {
+        string staging = AppDomain.CurrentDomain.BaseDirectory;
+        string root = Directory.GetParent(staging.TrimEnd(Path.DirectorySeparatorChar)).FullName;
+        string setup = Path.Combine(staging, "setup.exe");
+        string launcher = Path.Combine(root, "fynote.exe");
+        try
+        {
+            int pid;
+            if (!Int32.TryParse(parent, out pid) || !Version.IsMatch(previous))
+                throw new InvalidDataException("无效的更新请求。");
+            try
+            {
+                using (Process original = Process.GetProcessById(pid))
+                    if (!original.WaitForExit(30000)) throw new IOException("Fynote 尚未退出。");
+            }
+            catch (ArgumentException) { } // The original launcher has already exited.
+
+            var metadata = FileVersionInfo.GetVersionInfo(setup);
+            var version = new System.Version(metadata.FileMajorPart, metadata.FileMinorPart, metadata.FileBuildPart);
+            if (metadata.ProductName != "Fynote Installer" || version.CompareTo(new System.Version(previous)) <= 0)
+                throw new InvalidDataException("安装程序名称或版本不符。");
+
+            using (Process installer = Process.Start(new ProcessStartInfo(setup,
+                "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /DIR=\"" + root.TrimEnd(Path.DirectorySeparatorChar) + "\"")
+            { UseShellExecute = true }))
+            {
+                installer.WaitForExit();
+                if (installer.ExitCode != 0) throw new IOException("安装未完成，退出代码 " + installer.ExitCode + "。");
+            }
+
+            string stateFile = Path.Combine(root, "current.json");
+            var state = Json.Deserialize<Dictionary<string, string>>(File.ReadAllText(stateFile));
+            if (ValidVersion(state, "version") != version.ToString())
+                throw new InvalidDataException("安装后未检测到新版本。");
+            string pending = stateFile + ".setup";
+            File.WriteAllText(pending, Json.Serialize(new { version = version.ToString(), previousVersion = previous }), new UTF8Encoding(false));
+            File.Replace(pending, stateFile, null);
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show("更新未完成。\n" + error.Message, "Fynote");
+        }
+        finally
+        {
+            try { File.Delete(setup); } catch (IOException) { }
+            Process.Start(new ProcessStartInfo(launcher) { UseShellExecute = true });
         }
     }
 

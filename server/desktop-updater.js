@@ -12,6 +12,7 @@ const LATEST_RELEASE_API = 'https://api.github.com/repos/' + REPOSITORY + '/rele
 const VERSION = /^(?:0|[1-9]\d{0,5})(?:\.(?:0|[1-9]\d{0,5})){2}$/;
 const MAX_PACKAGE_BYTES = 400 * 1024 * 1024;
 const RESTART_EXIT_CODE = 42;
+const SETUP_EXIT_CODE = 43;
 const DOWNLOAD_HOSTS = new Set(['github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com']);
 
 function compareVersion(a, b) {
@@ -30,20 +31,23 @@ function parseRelease(release) {
   const version = typeof tag === 'string' && tag.startsWith('v') ? tag.slice(1) : '';
   if (!VERSION.test(version) || release.draft || release.prerelease) return null;
 
-  const filename = 'fynote-' + version + '-windows-x64.zip';
-  const url = RELEASES_URL + '/download/' + tag + '/' + filename;
   const assets = Array.isArray(release.assets) ? release.assets : [];
-  const asset = assets.find(item => item && item.name === filename &&
-    item.browser_download_url === url && item.state === 'uploaded' &&
-    Number.isSafeInteger(item.size) && item.size > 0 && item.size <= MAX_PACKAGE_BYTES &&
-    /^sha256:[a-f0-9]{64}$/i.test(item.digest || ''));
+  function verifiedAsset(filename) {
+    const url = RELEASES_URL + '/download/' + tag + '/' + filename;
+    const asset = assets.find(item => item && item.name === filename &&
+      item.browser_download_url === url && item.state === 'uploaded' &&
+      Number.isSafeInteger(item.size) && item.size > 0 && item.size <= MAX_PACKAGE_BYTES &&
+      /^sha256:[a-f0-9]{64}$/i.test(item.digest || ''));
+    return asset ? { url, size: asset.size, sha256: asset.digest.slice(7).toLowerCase() } : null;
+  }
 
   return {
     version,
     url: RELEASES_URL + '/tag/' + tag,
     notes: String(release.body || '').slice(0, 5000),
     publishedAt: release.published_at || null,
-    windows: asset ? { url, size: asset.size, sha256: asset.digest.slice(7).toLowerCase() } : null
+    windows: verifiedAsset('fynote-' + version + '-windows-x64.zip'),
+    setup: verifiedAsset('fynote-Setup-' + version + '.exe')
   };
 }
 
@@ -178,4 +182,16 @@ async function installRelease(root, currentVersion, release, fetchImpl = fetch) 
   }
 }
 
-module.exports = { compareVersion, installationRoot, installRelease, LATEST_RELEASE_API, parseRelease, RESTART_EXIT_CODE };
+async function stageSetup(root, asset, fetchImpl = fetch) {
+  const directory = path.join(root, '.update');
+  await files.mkdir(directory, { recursive: true });
+  const temporary = path.join(directory, crypto.randomUUID() + '.exe');
+  try {
+    await fetchPackage(asset, temporary, fetchImpl);
+    await files.rename(temporary, path.join(directory, 'setup.exe'));
+  } finally {
+    await files.rm(temporary, { force: true });
+  }
+}
+
+module.exports = { stageSetup, SETUP_EXIT_CODE, compareVersion, installationRoot, installRelease, LATEST_RELEASE_API, parseRelease, RESTART_EXIT_CODE };

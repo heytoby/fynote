@@ -88,8 +88,8 @@ export class UpdateBannerComponent implements OnInit {
         this.http.post<{ version: string }>(`${environment.apiUrl}/admin/update-status/install`,
           { version: this.status.latest }, { headers: this.auth.authHeaders() })
       );
-      this.message = '更新已安装，正在重启 Fynote。';
-      const deadline = Date.now() + 60_000;
+      this.message = '正在安装并重启 Fynote。';
+      const deadline = Date.now() + 180_000;
       while (Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 750));
         try {

@@ -35,7 +35,7 @@ const { createIntegrationRequests } = require('./integration-requests');
 const integrationRequests = createIntegrationRequests();
 const fullBackup = require('./full-backup');
 const { readTakeoutZip } = require('./takeout-zip');
-const { compareVersion, installationRoot, installRelease, LATEST_RELEASE_API, parseRelease, RESTART_EXIT_CODE } = require('./desktop-updater');
+const { compareVersion, installationRoot, installRelease, LATEST_RELEASE_API, parseRelease, RESTART_EXIT_CODE, stageSetup, SETUP_EXIT_CODE } = require('./desktop-updater');
 
 // Upload clients send flat metadata fields. Never interpret nested objects or
 // attacker-chosen array indexes while parsing multipart field names.
@@ -4696,7 +4696,7 @@ app.get('/api/admin/update-status', requireAuth, requireAdmin, asyncRoute(async 
     publishedAt: latest?.publishedAt || null,
     isOutdated,
     desktop,
-    canInstall: desktop && isOutdated && !!latest?.windows && !updateCheckCache.error,
+    canInstall: desktop && isOutdated && !!desktopUpdateAsset(latest) && !updateCheckCache.error,
     suppressed: !!suppressed,
     dismissedForever,
     dismissedUntil,
@@ -4704,6 +4704,14 @@ app.get('/api/admin/update-status', requireAuth, requireAdmin, asyncRoute(async 
     checkError: updateCheckCache.error
   });
 }));
+
+function desktopUsesSetup() {
+  return !!desktopRoot && fs.existsSync(path.join(desktopRoot, 'installation.ini'));
+}
+
+function desktopUpdateAsset(release) {
+  return desktopUsesSetup() ? release?.setup : release?.windows;
+}
 
 app.post('/api/admin/update-status/install', requireAuth, requireAdmin, asyncRoute(async (req, res) => {
   if (!isDesktopRequest(req) || !req.browserAuth || req.get('origin') !== `http://127.0.0.1:${port}`) {
@@ -4713,18 +4721,20 @@ app.post('/api/admin/update-status/install', requireAuth, requireAdmin, asyncRou
   desktopUpdating = true;
   try {
     const latest = await getLatestRelease(true);
-    if (updateCheckCache.error || !latest?.windows || req.body?.version !== latest.version ||
+    if (updateCheckCache.error || !desktopUpdateAsset(latest) || req.body?.version !== latest.version ||
         compareVersion(latest.version, KEPT_VERSION) <= 0) {
       desktopUpdating = false;
       return res.status(409).json({ error: '更新版本已变化，请重新检查更新。' });
     }
-    await installRelease(desktopRoot, KEPT_VERSION, latest);
+    const useSetup = desktopUsesSetup();
+    if (useSetup) await stageSetup(desktopRoot, latest.setup);
+    else await installRelease(desktopRoot, KEPT_VERSION, latest);
     res.json({ version: latest.version });
     setImmediate(() => {
       realtimeClients.forEach(sockets => sockets.forEach(socket => socket.terminate()));
       server.close(() => db.close(error => {
         if (error) console.error('Fynote update: database close failed', error);
-        process.exit(RESTART_EXIT_CODE);
+        process.exit(useSetup ? SETUP_EXIT_CODE : RESTART_EXIT_CODE);
       }));
     });
   } catch (error) {

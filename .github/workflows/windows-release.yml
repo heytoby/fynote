@@ -33,6 +33,13 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: node --test server/desktop-updater.test.js
       - run: npm run build
+      - name: Ensure Inno Setup is available
+        shell: pwsh
+        run: |
+          if (-not (Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'))) {
+            choco install innosetup --version=6.5.4 --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
+          }
       - id: package
         shell: pwsh
         run: |
@@ -40,12 +47,14 @@ jobs:
           if ($env:GITHUB_REF -like 'refs/tags/*' -and $env:GITHUB_REF_NAME -ne "v$version") {
             throw 'The release tag does not match package.json.'
           }
-          ./scripts/package-windows.ps1 -OutputDirectory "$env:RUNNER_TEMP/fynote-release"
+          ./scripts/package-windows.ps1 -OutputDirectory "$env:RUNNER_TEMP/fynote-release" -BuildInstaller
           "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: fynote-windows
-          path: ${{ runner.temp }}/fynote-release/*.zip
+          path: |
+            ${{ runner.temp }}/fynote-release/*.zip
+            ${{ runner.temp }}/fynote-release/*.exe
           if-no-files-found: error
 
   publish:
@@ -70,6 +79,6 @@ jobs:
             echo "Release $tag already exists."
             exit 0
           fi
-          gh release create "$tag" "release/fynote-$RELEASE_VERSION-windows-x64.zip" \
+          gh release create "$tag" "release/fynote-Setup-$RELEASE_VERSION.exe" "release/fynote-$RELEASE_VERSION-windows-x64.zip" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --title "Fynote $RELEASE_VERSION" --generate-notes --latest
