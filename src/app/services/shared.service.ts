@@ -497,10 +497,14 @@ export class SharedService {
       add: async (name: string) => {
         if (this.binders.sync.writesLocally) return this.binders.save(name);
         const clean = String(name || '').trim();
-        if (!clean) return;
+        if (!clean) throw new Error('请输入文件夹名称');
         const names = this.storedBinders();
         if (!names.some(item => item.toLowerCase() === clean.toLowerCase())) {
           this.saveStoredBinders([...names, clean]);
+          // saveStoredBinders swallows storage errors; never report a folder that did not persist.
+          if (!this.storedBinders().some(item => item.toLowerCase() === clean.toLowerCase())) {
+            throw new Error('无法保存文件夹，请检查设备存储空间。');
+          }
         }
         this.refreshBinderList();
       },

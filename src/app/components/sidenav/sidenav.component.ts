@@ -140,7 +140,9 @@ export class NavComponent implements OnInit, OnDestroy {
   openBinderModal(focusNewBinder = false, parent = '') {
     this.binderParent = parent;
     this.binderEditError = '';
-    if (this.binderError?.nativeElement) this.binderError.nativeElement.hidden = true;
+    // A stale in-flight flag must never leave the dialog permanently read-only.
+    this.binderBusy = false;
+    this.hideBinderError();
     const container = this.binderModalContainer?.nativeElement;
     if (!container) return;
     container.style.display = 'block';
@@ -160,32 +162,70 @@ export class NavComponent implements OnInit, OnDestroy {
     }
   }
 
+  private showBinderError(message: string) {
+    this.binderCreateError = message;
+    const error = this.binderError?.nativeElement;
+    if (error) error.hidden = false;
+  }
+
+  private hideBinderError() {
+    const error = this.binderError?.nativeElement;
+    if (error) error.hidden = true;
+  }
+
+  /**
+   * A commit that never settles used to leave `binderBusy` stuck at true, which
+   * silently disabled the input and every manage control for the rest of the
+   * session. Race it so the failure surfaces and the flag is released.
+   */
+  private async addBinderWithTimeout(path: string) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('保存超时，请稍后重试。')), 15000);
+    });
+    try {
+      await Promise.race([this.Shared.binder.db.add(path), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async addBinder(el: HTMLInputElement) {
     if (!el) return
     const name = el.value.trim()
-    if (!name || this.binderBusy) return
-    if (name.includes(folderSeparator)) return;
+    if (this.binderBusy) {
+      this.showBinderError('正在保存，请稍候…');
+      return;
+    }
+    if (!name) {
+      this.showBinderError('请输入文件夹名称');
+      el.focus();
+      return;
+    }
+    if (name.includes(folderSeparator)) {
+      this.showBinderError('文件夹名称不能包含特殊分隔符');
+      el.focus();
+      return;
+    }
     const path = this.binderParent ? this.binderParent + folderSeparator + name : name;
     const exists = this.Shared.binder.list.some(binder => binder.name.toLowerCase() === path.toLowerCase())
     if (exists) {
-      this.binderCreateError = '同一位置已有同名文件夹';
-      this.binderError.nativeElement.hidden = false
+      this.showBinderError('同一位置已有同名文件夹');
       el.focus()
       return
     }
     this.binderBusy = true;
-    this.binderError.nativeElement.hidden = true;
+    this.hideBinderError();
     try {
-      await this.Shared.binder.db.add(path);
+      await this.addBinderWithTimeout(path);
       if (this.binderParent) {
         this.expandedFolders.add(this.binderParent);
         this.saveExpandedFolders();
       }
       el.value = '';
       this.bindersExpanded = true;
-    } catch {
-      this.binderCreateError = '无法创建文件夹，请重试。';
-      this.binderError.nativeElement.hidden = false;
+    } catch (error) {
+      this.showBinderError(error instanceof Error && error.message ? error.message : '无法创建文件夹，请重试。');
     } finally {
       this.binderBusy = false;
       setTimeout(() => el.focus(), 0);
@@ -235,7 +275,7 @@ export class NavComponent implements OnInit, OnDestroy {
   }
 
   private async changeBinder(change: () => Promise<unknown>) {
-    if (this.binderBusy) return;
+    if (this.binderBusy) { this.binderEditError = '正在保存，请稍候…'; return; }
     this.binderBusy = true;
     this.binderEditError = '';
     try {
