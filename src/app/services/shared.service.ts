@@ -87,6 +87,10 @@ export class SharedService {
         }
         this.Notes.load().catch(console.error)
         if (navigator.onLine) this.Labels.load().catch(console.error)
+        // Server workspaces keep the folder catalog in IndexedDB too. Without this
+        // the sidebar and the manage dialog stay empty until some other action
+        // reloads them, so saved folders look lost and cannot be managed.
+        this.binders.load().catch(console.error)
       } else {
         // Logout: clear the in-memory mirror so the next user doesn't
         // briefly see the previous account's notes.
