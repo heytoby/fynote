@@ -5,6 +5,12 @@ import { Workspace, WorkspacePreferences } from '../interfaces/workspace';
 import { createUuid } from '../utils/uuid';
 import { OfflineStoreService } from './offline-store.service';
 
+/** The packaged desktop shell is a single-user local app: no account, no server. */
+function isDesktopShell(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Electron\//i.test(navigator.userAgent);
+}
+
 @Injectable({ providedIn: 'root' })
 export class WorkspaceService {
   private readonly selectionKey = 'kept_active_workspace';
@@ -16,7 +22,7 @@ export class WorkspaceService {
 
   get isLocal() { return !!this.local$.value || !!localStorage.getItem(this.selectionKey); }
   get local() { return this.local$.value; }
-  get canUseLocal() { return Capacitor.isNativePlatform(); }
+  get canUseLocal() { return Capacitor.isNativePlatform() || isDesktopShell(); }
   get needsChoice() {
     return this.canUseLocal && !this.isLocal && !localStorage.getItem('gk_session') &&
       !(window as Window & { KEPT_API_URL?: string }).KEPT_API_URL;
@@ -30,12 +36,15 @@ export class WorkspaceService {
         throw new Error('The selected workspace is unavailable. Your stored data has been preserved.');
       }
       this.local$.next(workspace);
+    } else if (isDesktopShell()) {
+      // The desktop build is a single-user local app: open (or create) the on-device
+      // library instead of walking the account/login flow.
+      await this.activateLocal(await this.newLocalWorkspace('active'));
     }
     this.initialized = true;
   }
 
-  async createLocal(status: Workspace['status'] = 'active') {
-    if (!this.initialized) await this.ready;
+  private async newLocalWorkspace(status: Workspace['status']): Promise<Workspace> {
     const id = createUuid();
     const now = new Date().toISOString();
     const workspace: Workspace = {
@@ -45,6 +54,18 @@ export class WorkspaceService {
       preferences: { theme: 'light', followSystemTheme: true, showPastReminders: false }
     };
     await this.store.saveWorkspace(workspace);
+    return workspace;
+  }
+
+  private async activateLocal(workspace: Workspace) {
+    localStorage.setItem(this.selectionKey, workspace.id);
+    this.local$.next(workspace);
+    window.dispatchEvent(new CustomEvent('kept-workspace-changed', { detail: { id: workspace.id, generation: workspace.generation } }));
+  }
+
+  async createLocal(status: Workspace['status'] = 'active') {
+    if (!this.initialized) await this.ready;
+    const workspace = await this.newLocalWorkspace(status);
     if (status === 'active') await this.activate(workspace);
     void navigator.storage?.persist?.().catch(() => false);
     return workspace;
