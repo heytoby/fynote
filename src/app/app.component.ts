@@ -4,6 +4,7 @@ import { NavigationEnd, Router } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
 import { PushNotificationService } from './services/push-notification.service';
 import { SharedService } from './services/shared.service';
+import { MarkdownLibraryService } from './services/markdown-library.service';
 import { ShareIntentsService } from './services/share-intents.service';
 import { AuthService } from './services/auth.service';
 import { ManagedHostingService } from './services/managed-hosting.service';
@@ -156,8 +157,12 @@ export class AppComponent implements OnInit, OnDestroy {
     public auth: AuthService,
     private ngZone: NgZone,
     private router: Router,
-    private managedHosting: ManagedHostingService
-  ) { void this.auth.workspace.ready.catch(error => this.ngZone.run(() => this.storageError = error instanceof Error ? error.message : 'Could not open device storage.')); }
+    private managedHosting: ManagedHostingService,
+    private markdownLibrary: MarkdownLibraryService
+  ) {
+    void this.markdownLibrary.start();
+    void this.auth.workspace.ready.catch(error => this.ngZone.run(() => this.storageError = error instanceof Error ? error.message : 'Could not open device storage.'));
+  }
 
   ngOnInit() {
     this.stopLocalization = startSimplifiedChineseLocalization();

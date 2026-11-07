@@ -1,5 +1,62 @@
-const { app, BrowserWindow, dialog, shell, screen } = require('electron');
+const { app, BrowserWindow, dialog, shell, screen, ipcMain } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
+
+/** Markdown library root: Documents/Fynote, overridable for tests. */
+function notesRoot() {
+  const override = process.env.FYNOTE_NOTES_DIR;
+  if (override && path.isAbsolute(override)) return override;
+  return path.join(app.getPath('documents'), 'Fynote');
+}
+
+/** Resolve a renderer-supplied relative path inside the library, or throw. */
+function safePath(root, relativePath) {
+  const target = path.resolve(root, String(relativePath || ''));
+  const prefix = path.resolve(root) + path.sep;
+  if (target !== path.resolve(root) && !target.startsWith(prefix)) throw new Error('Path escapes the notes library.');
+  return target;
+}
+
+function walkMarkdown(root, current, files) {
+  for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+    if (entry.name.startsWith('.')) continue;
+    const full = path.join(current, entry.name);
+    if (entry.isDirectory()) walkMarkdown(root, full, files);
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+      const stat = fs.statSync(full);
+      files.push({
+        path: path.relative(root, full).split(path.sep).join('/'),
+        content: fs.readFileSync(full, 'utf8'),
+        modifiedMs: stat.mtimeMs
+      });
+    }
+  }
+}
+
+ipcMain.handle('fynote:notes:dir', () => notesRoot());
+
+ipcMain.handle('fynote:notes:list', () => {
+  const root = notesRoot();
+  fs.mkdirSync(root, { recursive: true });
+  const files = [];
+  walkMarkdown(root, root, files);
+  return files;
+});
+
+ipcMain.handle('fynote:notes:write', (_event, relativePath, content) => {
+  const root = notesRoot();
+  fs.mkdirSync(root, { recursive: true });
+  const target = safePath(root, relativePath);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, String(content ?? ''), 'utf8');
+  return true;
+});
+
+ipcMain.handle('fynote:notes:remove', (_event, relativePath) => {
+  fs.rmSync(safePath(notesRoot(), relativePath), { force: true });
+  return true;
+});
+
 
 const port = Number(app.commandLine.getSwitchValue('fynote-port'));
 const profile = app.commandLine.getSwitchValue('fynote-profile');
@@ -56,7 +113,12 @@ function start() {
       titleBarOverlay: { color: '#e6e6e6', symbolColor: '#17161b', height: 48 },
       roundedCorners: true,
       backgroundColor: '#e6e6e6',
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true }
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        preload: path.join(__dirname, 'preload.cjs')
+      }
     });
     window.removeMenu();
     window.webContents.on('will-navigate', (event, url) => {
