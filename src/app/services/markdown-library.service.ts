@@ -58,7 +58,7 @@ function yamlValue(value: string): string {
 
 function safeName(value: string): string {
   const cleaned = String(value || '')
-    .replace(/[<>:"\\|?*\u0000-\u001f]/g, ' ')
+    .replace(/[<>:"/\\|?*\u0000-\u001f]/g, ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[. ]+|[. ]+$/g, '')
     .slice(0, 80)
