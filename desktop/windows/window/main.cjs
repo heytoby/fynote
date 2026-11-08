@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell, screen, ipcMain } = require('electron');
+const { app, BrowserWindow, dialog, shell, screen, ipcMain, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -60,13 +60,39 @@ function registerNotesIpc() {
 }
 
 
-const port = Number(app.commandLine.getSwitchValue('fynote-port'));
+// The SPA is served from a privileged scheme so IndexedDB/localStorage keep a
+// real, stable origin without any local HTTP server.
+protocol.registerSchemesAsPrivileged([{
+  scheme: 'fynote',
+  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
+}]);
+
+const ORIGIN = 'fynote://app';
 const profile = app.commandLine.getSwitchValue('fynote-profile');
 const smoke = app.commandLine.hasSwitch('fynote-smoke');
-if (!Number.isInteger(port) || port < 1 || port > 65535 || !path.isAbsolute(profile)) {
+const webRoot = path.resolve(__dirname, '..', '..', '..', 'app', 'dist', 'keep');
+if (!path.isAbsolute(profile) || !fs.existsSync(path.join(webRoot, 'index.html'))) {
   app.exit(1);
 } else {
   start();
+}
+
+function serveWebAsset(request) {
+  const url = new URL(request.url);
+  const requested = decodeURIComponent(url.pathname);
+  const candidate = path.resolve(webRoot, '.' + requested);
+  const inside = candidate === webRoot || candidate.startsWith(webRoot + path.sep);
+  let file = inside && fs.existsSync(candidate) && fs.statSync(candidate).isFile() ? candidate : null;
+  if (!file) file = path.join(webRoot, 'index.html');
+  const types = {
+    '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8', '.json': 'application/json',
+    '.png': 'image/png', '.ico': 'image/x-icon', '.webmanifest': 'application/manifest+json',
+    '.woff2': 'font/woff2', '.otf': 'font/otf', '.svg': 'image/svg+xml'
+  };
+  return new Response(fs.createReadStream(file), {
+    headers: { 'Content-Type': types[path.extname(file).toLowerCase()] || 'application/octet-stream' }
+  });
 }
 
 function start() {
@@ -78,7 +104,7 @@ function start() {
     return;
   }
 
-  const origin = 'http://127.0.0.1:' + port;
+  const origin = ORIGIN;
   let window;
   function openExternal(url) {
     try {
@@ -98,6 +124,7 @@ function start() {
   app.on('window-all-closed', () => app.quit());
 
   app.whenReady().then(async () => {
+    protocol.handle('fynote', serveWebAsset);
     registerNotesIpc();
     const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
     const w = Math.min(1160, width);
