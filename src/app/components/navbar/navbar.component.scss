@@ -1276,3 +1276,20 @@
   background: transparent;
 }
 .search-row .form .input-container { border-radius: 999px; padding: 0 18px; }
+
+/* Brand wordmark is now an image. */
+.fynote-wordmark {
+  align-items: center;
+  display: inline-flex;
+  padding: 0;
+
+  .brand-logo {
+    display: block;
+    height: 26px;
+    width: auto;
+  }
+}
+
+@media (min-width: 901px) {
+  .first-col .fynote-wordmark .brand-logo { height: 30px; }
+}

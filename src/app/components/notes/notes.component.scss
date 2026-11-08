@@ -1261,3 +1261,71 @@
     width: min(560px, 52vw) !important;
   }
 }
+
+/* The docked editor fills its column like a full-height document. */
+@media (min-width: 901px) {
+  .modal-container .modal ::ng-deep app-input,
+  .modal-container .modal ::ng-deep .note-main,
+  .modal-container .modal ::ng-deep .note-body {
+    box-sizing: border-box;
+    height: 100% !important;
+    max-height: none !important;
+  }
+  .modal-container .modal ::ng-deep app-input {
+    display: flex;
+    flex-direction: column;
+  }
+  .modal-container .modal ::ng-deep .note-main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+  }
+  .modal-container .modal ::ng-deep .note-body {
+    flex: 1;
+    min-height: 240px;
+    overflow-y: auto;
+  }
+}
+
+/* Docked editor: lay the panel out as a flex column so the document fills it. */
+@media (min-width: 901px) {
+  .modal-container .modal {
+    display: flex !important;
+    flex-direction: column;
+  }
+  .modal-container .modal ::ng-deep app-input {
+    display: flex !important;
+    flex: 1 1 auto !important;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .modal-container .modal ::ng-deep app-input > div {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .modal-container .modal ::ng-deep .note-main {
+    display: flex !important;
+    flex: 1 1 auto !important;
+    flex-direction: column;
+    height: auto !important;
+    min-height: 0;
+  }
+  .modal-container .modal ::ng-deep .note-body,
+  .modal-container .modal ::ng-deep .body-segments {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+}
+
+/* Give the docked document a full-height canvas even when the content is short. */
+@media (min-width: 901px) {
+  .modal-container .modal ::ng-deep .note-main {
+    min-height: calc(100dvh - 2px) !important;
+  }
+  .desktop-placeholder-input.mobile-active ::ng-deep .note-main {
+    min-height: calc(100dvh - 2px) !important;
+  }
+}
