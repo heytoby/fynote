@@ -447,7 +447,7 @@
   <div class="search">
     <div class="search-icon"></div>
     <input #newLabelInput type="text" maxlength="50" [placeholder]="'Enter label name' | uiText:'输入标签名称'"
-      (keydown.enter)="addLabelFromMenu(newLabelInput); $event.preventDefault()" (blur)="addLabelFromMenu(newLabelInput)"
+      (keydown.enter)="!$any($event).isComposing && addLabelFromMenu(newLabelInput); !$any($event).isComposing && $event.preventDefault()" (blur)="addLabelFromMenu(newLabelInput)"
       (input)="labelMenuError=''">
   </div>
   @if (newLabelInput.value.trim().length) {
@@ -478,7 +478,7 @@
   @if (!inheritsSharedOrganization('binders')) {
   <div class="search">
     <input #newBinderInput type="text" maxlength="50" [placeholder]="'Enter binder name' | uiText:'输入文件夹名称'"
-      (keydown.enter)="addBinderFromMenu(newBinderInput); $event.preventDefault()" (blur)="addBinderFromMenu(newBinderInput)"
+      (keydown.enter)="!$any($event).isComposing && addBinderFromMenu(newBinderInput); !$any($event).isComposing && $event.preventDefault()" (blur)="addBinderFromMenu(newBinderInput)"
       (input)="binderMenuError=''">
   </div>
   @if (newBinderInput.value.trim().length) {

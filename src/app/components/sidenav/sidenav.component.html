@@ -138,7 +138,7 @@
         <div class="input-container">
           <div #binderPlusIcon class="plus-icon H" (click)="binderInput.value=''"></div>
           <input #binderInput (blur)="binderPlusIcon.classList.toggle('cancel-icon')"
-            (focus)="binderPlusIcon.classList.toggle('cancel-icon')" (keydown.enter)="addBinder(binderInput)"
+            (focus)="binderPlusIcon.classList.toggle('cancel-icon')" (keydown.enter)="!$any($event).isComposing && addBinder(binderInput)"
             type="text" [placeholder]="'New folder' | uiText:'新建文件夹'" maxlength="50" [disabled]="binderBusy" (input)="''">
           <div [style.display]="binderInput.value.length ? 'block' : 'none'" class="check-icon H"
             (click)="addBinder(binderInput)"></div>
@@ -210,7 +210,7 @@
         <div class="input-container">
           <div #plusIcon class="plus-icon H" (click)="labelInput.value=''"></div>
           <input #labelInput (blur)="plusIcon.classList.toggle('cancel-icon')"
-            (focus)="plusIcon.classList.toggle('cancel-icon')" (keydown.enter)="addLabel(labelInput)"
+            (focus)="plusIcon.classList.toggle('cancel-icon')" (keydown.enter)="!$any($event).isComposing && addLabel(labelInput)"
             type="text" placeholder="新建标签" maxlength="50" (input)="''">
           <div [style.display]="labelInput.value.length ? 'block' : 'none'" class="check-icon H"
             (click)="addLabel(labelInput)"></div>
