@@ -818,6 +818,10 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.clickedNoteData = noteData.isCardPreview ? await this.notesService.get(noteData.id!, { merge: false }).catch(() => noteData) : noteData
     const modalContainer = this.modalContainer.nativeElement
     modalContainer.style.display = 'block';
+    // Lets the page lay out as sidebar | list | editor while a note is open.
+    document.body.classList.add('note-editor-open')
+    // The board is narrower now, so let the masonry re-pack its columns.
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 60)
     this.cd.detectChanges()
     this.prepareModalOpenAnimation(source)
     clickedNote?.classList.add('hide')
@@ -920,6 +924,8 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     }
     this.modalClosePromise = new Promise(resolve => setTimeout(() => {
       modalContainer.style.display = 'none'
+      document.body.classList.remove('note-editor-open')
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 60)
       this.openImagePickerOnModal = false
       this.modal.nativeElement.removeAttribute('style')
       this.restoreModalScrollPosition()
