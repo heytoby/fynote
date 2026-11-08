@@ -1299,14 +1299,13 @@
     flex-direction: column;
     min-height: 0;
   }
-  .modal-container .modal ::ng-deep app-input > div {
+  .modal-container .modal ::ng-deep app-input > div:first-child {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
     min-height: 0;
   }
   .modal-container .modal ::ng-deep .note-main {
-    display: flex !important;
     flex: 1 1 auto !important;
     flex-direction: column;
     height: auto !important;
