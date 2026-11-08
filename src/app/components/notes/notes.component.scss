@@ -1230,3 +1230,10 @@
   }
 }
 
+
+/* Note body text uses the light weight of Source Han Sans. */
+.body-segments .body,
+.body-segments .text {
+  font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
+  font-weight: 300;
+}
