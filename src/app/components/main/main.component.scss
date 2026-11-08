@@ -1251,3 +1251,20 @@
     overflow-y: auto;
   }
 }
+
+/* ---- New-note editor is also a full page. ---- */
+@media (min-width: 901px) {
+  .desktop-placeholder-input.mobile-active {
+    background: #fff !important;
+    inset: 0;
+    pointer-events: auto !important;
+  }
+  .desktop-placeholder-input.mobile-active ::ng-deep .main-container {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    height: 100vh !important;
+    margin: 0 !important;
+    width: 100vw !important;
+  }
+}
