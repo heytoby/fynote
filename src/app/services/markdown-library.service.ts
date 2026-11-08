@@ -106,9 +106,19 @@ export class MarkdownLibraryService {
     if (!partition) return;
     const stored = await this.store.listNotes(partition);
     const byId = new Map(stored.map((note) => [String(note.syncId || ''), note]));
+    const byFile = new Map(stored.map((note) => [
+      `${String(note.binder || '').toLowerCase()}|${String(note.noteTitle || '').trim().toLowerCase()}`,
+      note
+    ]));
     for (const file of files) {
       const { meta, body } = parseMarkdown(file.content);
-      const existing = meta.id ? byId.get(meta.id) : undefined;
+      const binder = this.binderFromPath(file.path);
+      const title = meta.title || this.titleFromPath(file.path);
+      // A file without an id (hand-written, or exported by an older build) must
+      // map onto the note that already owns this folder+title instead of
+      // duplicating it on every start.
+      const existing = (meta.id ? byId.get(meta.id) : undefined) ||
+        byFile.get(`${binder.toLowerCase()}|${title.trim().toLowerCase()}`);
       const modified = new Date(file.modifiedMs).toISOString();
       const source = body.replace(/\r\n/g, '\n');
       if (!existing) {
@@ -116,7 +126,7 @@ export class MarkdownLibraryService {
         if (byId.has(syncId)) continue;
         await this.store.commitMutation(workspace, 'note.upsert', syncId, {
           syncId,
-          noteTitle: meta.title || this.titleFromPath(file.path),
+          noteTitle: title,
           markdownSource: source,
           contentFormat: 'markdown',
           noteBody: '',
@@ -125,7 +135,7 @@ export class MarkdownLibraryService {
           bgImage: '',
           isCbox: false,
           labels: [],
-          binder: this.binderFromPath(file.path),
+          binder,
           createdAt: meta.created || modified,
           updatedAt: meta.updated || modified
         } as unknown as Record<string, unknown>);
