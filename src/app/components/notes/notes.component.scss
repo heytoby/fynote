@@ -1237,3 +1237,27 @@
   font-family: "Source Han Sans SC", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
   font-weight: 300;
 }
+
+/* Desktop: opening a note docks the editor to the right as a full-height panel
+   instead of a floating dialog. The inline left/top set by the open animation
+   is overridden so the panel always sits flush against the window edge. */
+@media (min-width: 901px) {
+  .modal-container {
+    background: transparent !important;
+    pointer-events: none;
+  }
+  .modal-container .modal {
+    border-radius: 0;
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.10);
+    height: 100% !important;
+    left: auto !important;
+    max-height: none;
+    padding: 0;
+    pointer-events: auto;
+    right: 0;
+    top: 0 !important;
+    transform: none !important;
+    transition: none;
+    width: min(560px, 52vw) !important;
+  }
+}

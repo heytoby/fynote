@@ -392,7 +392,7 @@
 
 }
 
-// PWA install help modal — rendered from main.component when the user taps
+// PWA install help modal 鈥?rendered from main.component when the user taps
 // the mobile install FAB. Mirrors the sidenav's version because Angular's
 // view encapsulation scopes those styles to the sidenav component.
 .pwa-install-backdrop {
@@ -1189,22 +1189,22 @@
   }
 */
 
-/* On desktop the new-note composer is a centred dialog, not a phone top bar. */
-@media (min-width: 701px) {
+
+/* Desktop: the new-note editor docks to the right edge as a full-height panel. */
+@media (min-width: 901px) {
   .desktop-placeholder-input.mobile-active {
-    align-items: center;
-    background: rgba(32, 33, 36, 0.45);
-    display: flex;
-    justify-content: center;
-    padding: 24px;
+    background: transparent;
+    display: block;
+    pointer-events: none;
   }
-  .desktop-placeholder-input.mobile-active .main-container {
+  .desktop-placeholder-input.mobile-active ::ng-deep .main-container {
     background: #fff;
-    border-radius: 14px;
-    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
-    height: min(78vh, 700px);
-    max-height: 100%;
+    border-left: 1px solid var(--fynote-rule, #e6e6e6);
+    box-shadow: -12px 0 32px rgba(0, 0, 0, 0.10);
+    height: 100% !important;
+    margin: 0 0 0 auto !important;
     overflow: hidden;
-    width: min(780px, 92vw);
+    pointer-events: auto;
+    width: min(560px, 52vw) !important;
   }
 }
