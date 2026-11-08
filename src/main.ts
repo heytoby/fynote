@@ -11,7 +11,9 @@ if (environment.production) {
 platformBrowserDynamic().bootstrapModule(AppModule, { applicationProviders: [provideZoneChangeDetection()], })
   .catch(err => console.error(err));
 
-if ('serviceWorker' in navigator) {
+// Service workers only exist for http(s) origins; the desktop shell loads the
+// app from its own scheme, where registration is unsupported.
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/kept-push-sw.js')
       .then(registration => registration.update())

@@ -605,11 +605,12 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
         numberOfColumns = containerWidth >= 240 ? 2 : 1
         this.noteWidth = Math.floor((containerWidth - gutter * (numberOfColumns - 1)) / numberOfColumns)
       } else {
-        this.noteWidth = 240
-        numberOfColumns = containerWidth >= 820 ? 4 : Math.floor((containerWidth + gutter) / (this.noteWidth + gutter))
-        this.noteWidth = Math.min(240, Math.floor((containerWidth - gutter * (numberOfColumns - 1)) / numberOfColumns))
+        // Cards keep a fixed width; the number of columns follows the window.
+        const targetWidth = 240
+        numberOfColumns = Math.max(1, Math.floor((containerWidth + gutter) / (targetWidth + gutter)))
+        this.noteWidth = targetWidth
       }
-      if (centerLandscapePhoneGrid || containerWidth >= 820) {
+      if (centerLandscapePhoneGrid || numberOfColumns > 1) {
         masonryWidth = `${numberOfColumns * this.noteWidth + Math.max(0, numberOfColumns - 1) * gutter}px`
       }
     }

@@ -1243,3 +1243,36 @@
   from { opacity: 0; transform: translateY(-10px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* The sidebar toggle only makes sense when the sidebar can actually be hidden. */
+@media (min-width: 701px) {
+  .first-col .sidebar-toggle { display: none; }
+}
+
+/* The search field is a capsule; its width is unchanged. */
+.sec-col .input-container {
+  border-radius: 999px;
+  padding: 0 18px;
+  background: var(--fynote-field, rgba(0, 0, 0, 0.06));
+}
+.sec-col .input-container .input {
+  border-radius: 999px;
+}
+
+/* Hide the sidebar toggle where the sidebar is always visible. */
+@media (min-width: 701px) {
+  .first-col .pic-container.sidebar-toggle { display: none !important; }
+}
+
+/* One capsule for the whole search field; the inner input stays transparent. */
+.search-row .form-container {
+  border-radius: 999px;
+  background: var(--fynote-field, rgba(0, 0, 0, 0.06));
+  overflow: hidden;
+}
+.search-row .form,
+.search-row .form .input-container,
+.search-row .form .input {
+  background: transparent;
+}
+.search-row .form .input-container { border-radius: 999px; padding: 0 18px; }
