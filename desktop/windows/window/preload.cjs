@@ -8,5 +8,9 @@ contextBridge.exposeInMainWorld('fynote', {
     list: () => ipcRenderer.invoke('fynote:notes:list'),
     write: (relativePath, content) => ipcRenderer.invoke('fynote:notes:write', relativePath, content),
     remove: (relativePath) => ipcRenderer.invoke('fynote:notes:remove', relativePath)
+  },
+  update: {
+    check: () => ipcRenderer.invoke('fynote:update:check'),
+    install: () => ipcRenderer.invoke('fynote:update:install')
   }
 });

@@ -22,6 +22,25 @@ interface UpdateStatus {
   checkError: string | null;
 }
 
+interface DesktopUpdateInfo {
+  current: string;
+  latest: string;
+  isOutdated: boolean;
+  canInstall: boolean;
+  releaseUrl: string | null;
+  notes: string | null;
+}
+
+type DesktopUpdateBridge = {
+  check(): Promise<DesktopUpdateInfo>;
+  install(): Promise<{ version: string }>;
+};
+
+function desktopUpdateBridge(): DesktopUpdateBridge | null {
+  const api = (window as unknown as { fynote?: { update?: DesktopUpdateBridge } }).fynote;
+  return api?.update ?? null;
+}
+
 @Component({
   selector: 'app-update-banner',
   templateUrl: './update-banner.component.html',
@@ -39,12 +58,31 @@ export class UpdateBannerComponent implements OnInit {
   constructor(private http: HttpClient, public auth: AuthService, private managedHosting: ManagedHostingService) {}
 
   async ngOnInit() {
+    // The desktop shell owns the update lifecycle itself: there is no server,
+    // so ask the Electron bridge instead of the admin HTTP endpoint.
+    if (desktopUpdateBridge()) { await this.refreshFromDesktop(); return; }
     if (!this.auth.isAdmin) return;
     // A managed-hosting provider owns the update lifecycle; nagging the
     // customer to update themselves would contradict that.
     const { managed } = await this.managedHosting.info();
     if (managed) return;
     await this.refresh();
+  }
+
+  private async refreshFromDesktop() {
+    const bridge = desktopUpdateBridge();
+    if (!bridge) return;
+    try {
+      const info = await bridge.check();
+      this.status = {
+        current: info.current, latest: info.latest, releaseUrl: info.releaseUrl, releaseNotes: info.notes,
+        publishedAt: null, isOutdated: info.isOutdated, desktop: true, canInstall: info.canInstall,
+        suppressed: false, dismissedForever: false, dismissedUntil: null,
+        checkedAt: new Date().toISOString(), checkError: null
+      };
+    } catch {
+      this.status = null;
+    }
   }
 
   async refresh() {
@@ -61,6 +99,18 @@ export class UpdateBannerComponent implements OnInit {
     if (this.checking || this.installing) return;
     this.checking = true;
     this.message = '';
+    const bridge = desktopUpdateBridge();
+    if (bridge) {
+      try {
+        await this.refreshFromDesktop();
+        if (!this.status) this.message = '检查更新失败，请稍后重试。';
+        else if (!this.status.isOutdated) this.message = '当前已是最新版本。';
+        else this.message = `发现新版本 ${this.status.latest}。`;
+      } finally {
+        this.checking = false;
+      }
+      return;
+    }
     try {
       this.status = await firstValueFrom(
         this.http.get<UpdateStatus>(`${environment.apiUrl}/admin/update-status`, {
@@ -82,6 +132,19 @@ export class UpdateBannerComponent implements OnInit {
 
   async installUpdate() {
     if (this.installing || this.checking || !this.status?.canInstall || !this.status.latest) return;
+    const bridge = desktopUpdateBridge();
+    if (bridge) {
+      this.installing = true;
+      this.message = '正在下载并校验更新包…';
+      try {
+        const result = await bridge.install();
+        this.message = `正在安装 ${result.version} 并重启 Fynote。`;
+      } catch (error) {
+        this.message = error instanceof Error ? error.message : '更新安装失败，请稍后重试。';
+        this.installing = false;
+      }
+      return;
+    }
     this.installing = true;
     this.message = '正在连接 GitHub 下载更新包。';
     const progress = setInterval(async () => {
@@ -131,7 +194,7 @@ export class UpdateBannerComponent implements OnInit {
   }
 
   get visible(): boolean {
-    return !this.manual && !this.status?.desktop && !!this.status?.isOutdated && !this.status.suppressed;
+    return !this.manual && !!this.status?.isOutdated && !this.status.suppressed;
   }
 
   toggleNotes(event: Event) {

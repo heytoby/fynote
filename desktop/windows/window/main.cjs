@@ -1,6 +1,87 @@
 const { app, BrowserWindow, dialog, shell, screen, ipcMain, protocol } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+
+const UPDATE_REPOSITORY = 'heytoby/fynote';
+const LATEST_RELEASE_API = process.env.FYNOTE_UPDATE_API ||
+  'https://api.github.com/repos/' + UPDATE_REPOSITORY + '/releases/latest';
+const SETUP_EXIT_CODE = 43;
+
+/** Folder that holds versions/, current.json and .update (the install root). */
+function installRoot(webRoot) {
+  return path.resolve(webRoot, '..', '..', '..');
+}
+
+function currentVersion(webRoot) {
+  try { return JSON.parse(fs.readFileSync(path.join(webRoot, '..', '..', 'package.json'), 'utf8')).version || '0.0.0'; }
+  catch { return '0.0.0'; }
+}
+
+function compareVersion(left, right) {
+  const parts = (value) => String(value || '').replace(/^v/i, '').split('-')[0].split('.').map(Number);
+  const a = parts(left);
+  const b = parts(right);
+  for (let index = 0; index < 3; index++) {
+    const difference = (a[index] || 0) - (b[index] || 0);
+    if (difference) return Math.sign(difference);
+  }
+  return 0;
+}
+
+/** Ask GitHub for the newest published installer. */
+async function checkForUpdate(webRoot) {
+  const current = currentVersion(webRoot);
+  const response = await fetch(LATEST_RELEASE_API, {
+    headers: { 'User-Agent': 'Fynote Desktop', Accept: 'application/vnd.github+json' }
+  });
+  if (!response.ok) throw new Error('GitHub returned ' + response.status);
+  const release = await response.json();
+  const version = String(release.tag_name || '').replace(/^v/, '');
+  if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Unexpected release tag');
+  const name = 'fynote-Setup-' + version + '.exe';
+  const asset = (release.assets || []).find((item) => item && item.name === name &&
+    item.state === 'uploaded' && typeof item.digest === 'string' && /^sha256:[0-9a-f]{64}$/i.test(item.digest));
+  const isOutdated = compareVersion(version, current) > 0;
+  return {
+    current,
+    latest: version,
+    isOutdated,
+    canInstall: isOutdated && !!asset,
+    releaseUrl: 'https://github.com/' + UPDATE_REPOSITORY + '/releases/tag/' + release.tag_name,
+    notes: String(release.body || '').slice(0, 4000),
+    asset: asset ? { url: asset.browser_download_url, size: asset.size, sha256: asset.digest.slice(7).toLowerCase() } : null
+  };
+}
+
+/** Download the installer, verify it, then hand over to the launcher (exit 43). */
+async function installUpdate(webRoot) {
+  const info = await checkForUpdate(webRoot);
+  if (!info.canInstall || !info.asset) throw new Error('No installable update.');
+  const directory = path.join(installRoot(webRoot), '.update');
+  fs.mkdirSync(directory, { recursive: true });
+  const temporary = path.join(directory, 'setup.download');
+  const target = path.join(directory, 'setup.exe');
+  const response = await fetch(info.asset.url, { headers: { 'User-Agent': 'Fynote Desktop' } });
+  if (!response.ok || !response.body) throw new Error('Download failed (' + response.status + ').');
+  const hash = crypto.createHash('sha256');
+  const meter = new TransformStream({
+    transform(chunk, controller) { hash.update(chunk); controller.enqueue(chunk); }
+  });
+  await pipeline(Readable.fromWeb(response.body.pipeThrough(meter)), fs.createWriteStream(temporary));
+  const digest = hash.digest('hex');
+  if (digest !== info.asset.sha256 || fs.statSync(temporary).size !== info.asset.size) {
+    fs.rmSync(temporary, { force: true });
+    throw new Error('Downloaded installer did not match the release.');
+  }
+  fs.rmSync(target, { force: true });
+  fs.renameSync(temporary, target);
+  setTimeout(() => app.exit(SETUP_EXIT_CODE), 300);
+  return { version: info.latest };
+}
+
 
 /** Markdown library root: Documents/Fynote, overridable for tests. */
 function notesRoot() {
@@ -57,6 +138,9 @@ function registerNotesIpc() {
     fs.rmSync(safePath(notesRoot(), relativePath), { force: true });
     return true;
   });
+
+  ipcMain.handle('fynote:update:check', () => checkForUpdate(webRoot));
+  ipcMain.handle('fynote:update:install', () => installUpdate(webRoot));
 }
 
 
