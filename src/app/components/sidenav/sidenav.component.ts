@@ -155,6 +155,14 @@ export class NavComponent implements OnInit, OnDestroy {
     document.removeEventListener('mousedown', this.binderMouseDownEvent)
   }
 
+  /** "完成" also commits whatever was typed, then closes the dialog. */
+  async finishBinderModal() {
+    const input = this.binderInput?.nativeElement as HTMLInputElement | undefined
+    if (input && input.value.trim()) await this.addBinder(input)
+    if (this.binderBusy) return
+    this.hideBinderModal()
+  }
+
   binderMouseDownEvent = (event: Event) => {
     let modalEl = this.binderModal.nativeElement
     if (!(modalEl as any).contains(event.target)) {
