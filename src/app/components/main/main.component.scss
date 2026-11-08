@@ -1188,3 +1188,23 @@
     color: #202124;
   }
 */
+
+/* On desktop the new-note composer is a centred dialog, not a phone top bar. */
+@media (min-width: 701px) {
+  .desktop-placeholder-input.mobile-active {
+    align-items: center;
+    background: rgba(32, 33, 36, 0.45);
+    display: flex;
+    justify-content: center;
+    padding: 24px;
+  }
+  .desktop-placeholder-input.mobile-active .main-container {
+    background: #fff;
+    border-radius: 14px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+    height: min(78vh, 700px);
+    max-height: 100%;
+    overflow: hidden;
+    width: min(780px, 92vw);
+  }
+}
