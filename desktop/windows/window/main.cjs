@@ -33,29 +33,31 @@ function walkMarkdown(root, current, files) {
   }
 }
 
-ipcMain.handle('fynote:notes:dir', () => notesRoot());
+function registerNotesIpc() {
+  ipcMain.handle('fynote:notes:dir', () => notesRoot());
 
-ipcMain.handle('fynote:notes:list', () => {
-  const root = notesRoot();
-  fs.mkdirSync(root, { recursive: true });
-  const files = [];
-  walkMarkdown(root, root, files);
-  return files;
-});
+  ipcMain.handle('fynote:notes:list', () => {
+    const root = notesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const files = [];
+    walkMarkdown(root, root, files);
+    return files;
+  });
 
-ipcMain.handle('fynote:notes:write', (_event, relativePath, content) => {
-  const root = notesRoot();
-  fs.mkdirSync(root, { recursive: true });
-  const target = safePath(root, relativePath);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, String(content ?? ''), 'utf8');
-  return true;
-});
+  ipcMain.handle('fynote:notes:write', (_event, relativePath, content) => {
+    const root = notesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const target = safePath(root, relativePath);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, String(content ?? ''), 'utf8');
+    return true;
+  });
 
-ipcMain.handle('fynote:notes:remove', (_event, relativePath) => {
-  fs.rmSync(safePath(notesRoot(), relativePath), { force: true });
-  return true;
-});
+  ipcMain.handle('fynote:notes:remove', (_event, relativePath) => {
+    fs.rmSync(safePath(notesRoot(), relativePath), { force: true });
+    return true;
+  });
+}
 
 
 const port = Number(app.commandLine.getSwitchValue('fynote-port'));
@@ -96,6 +98,7 @@ function start() {
   app.on('window-all-closed', () => app.quit());
 
   app.whenReady().then(async () => {
+    registerNotesIpc();
     const { x, y, width, height } = screen.getPrimaryDisplay().workArea;
     const w = Math.min(1160, width);
     const h = Math.min(820, height);
