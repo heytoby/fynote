@@ -57,8 +57,8 @@ type Mode = 'edit' | 'split' | 'preview'
     </div>
   `,
   styles: [`
-    :host { display: flex; flex: 1 1 auto; min-height: 0; }
-    .md-shell { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; width: 100%; }
+    :host { display: flex; flex: 1 1 auto; height: 100%; min-height: 0; }
+    .md-shell { display: flex; flex: 1 1 auto; flex-direction: column; height: 100%; min-height: 0; width: 100%; overflow: hidden; }
     .md-toolbar {
       align-items: center;
       border-bottom: 1px solid #ececec;
@@ -82,16 +82,15 @@ type Mode = 'edit' | 'split' | 'preview'
     .md-actions button:hover, .md-modes button:hover { background: #f1f3f4; }
     .md-modes { display: flex; gap: 2px; }
     .md-modes button.active { background: #e8f0fe; color: #1a73e8; }
-    .md-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; }
-    .md-shell { overflow: hidden; }
-    .md-body.split > * { box-sizing: border-box; flex: 1 1 50%; max-width: 50%; min-width: 0; overflow: hidden; }
-    .md-editor { display: flex; flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; }
-    .md-editor .cm-editor { flex: 1 1 auto; font-size: 15px; height: 100%; }
+    .md-body { display: grid; flex: 1 1 auto; grid-template-columns: 1fr; min-height: 0; min-width: 0; overflow: hidden; }
+    .md-body.split { grid-template-columns: 1fr 1fr; }
+    .md-body > * { box-sizing: border-box; min-height: 0; min-width: 0; overflow: hidden; }
+    .md-editor { display: flex; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+    .md-editor .cm-editor { flex: 1 1 auto; font-size: 15px; height: 100%; min-width: 0; }
     .md-editor .cm-scroller { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; line-height: 1.65; }
     .md-body.split .md-editor, .md-body.split .md-preview { flex: 1 1 0; min-width: 0; }
     .md-body.split .md-editor { border-right: 1px solid #ececec; }
     .md-preview {
-      flex: 1 1 0;
       min-width: 0;
       font-family: "Source Han Sans SC", "Microsoft YaHei", sans-serif;
       font-size: 15px;
