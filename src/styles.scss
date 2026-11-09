@@ -3770,3 +3770,12 @@ body :is(.overview-cbox-row, .cbox-row) .cbox-icon {
 .modal-container .icons-container.min[hidden] {
   display: none !important;
 }
+
+/* The folder panel is a real second column: it pushes the wall instead of covering it. */
+.main-section:has(#fynote-sidebar.is-expanded) .padding {
+  margin-left: 264px;
+  transition: margin-left 0.16s ease;
+}
+.main-section:has(#fynote-sidebar.is-expanded) .mobile-compose-fab {
+  right: 24px;
+}

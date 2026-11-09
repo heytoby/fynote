@@ -36,6 +36,11 @@ export class NavComponent implements OnInit, OnDestroy {
     return folderRows(this.Shared.binder.list.map(folder => folder.name), this.expandedFolders);
   }
 
+  /** The wall is narrower now; let the masonry re-pack. */
+  private relayoutWall() {
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 60)
+  }
+
   toggleFolder(path: string) {
     if (this.expandedFolders.has(path)) this.expandedFolders.delete(path);
     else this.expandedFolders.add(path);
@@ -363,12 +368,14 @@ export class NavComponent implements OnInit, OnDestroy {
     this.bindersExpanded = !this.bindersExpanded;
     if (this.bindersExpanded) { this.labelsExpanded = false; this.saveSectionExpanded('labels', false); }
     this.saveSectionExpanded('binders', this.bindersExpanded);
+    this.relayoutWall();
   }
 
   toggleLabels() {
     this.labelsExpanded = !this.labelsExpanded;
     if (this.labelsExpanded) { this.bindersExpanded = false; this.saveSectionExpanded('binders', false); }
     this.saveSectionExpanded('labels', this.labelsExpanded);
+    this.relayoutWall();
   }
 
   compactLabel(name: string) {
