@@ -122,11 +122,27 @@
   </div>
 }
 
-<div #modalContainer class="modal-container" [class.native-phone-modal]="nativePhoneLayout">
+<div #modalContainer class="modal-container" [class.native-phone-modal]="nativePhoneLayout"
+  [class.detail-mode]="modalMode === 'detail'" [class.edit-mode]="modalMode === 'edit'">
   <div #modal class="modal">
     @if (modalContainer.style.display == 'block') {
-      <app-input #noteEditor [noteToEdit]="clickedNoteData" [isEditing]="true" [autoOpenImagePicker]="openImagePickerOnModal">
-      </app-input>
+      @if (modalMode === 'detail') {
+        <div class="note-detail">
+          <div class="note-detail-card">
+          <header class="note-detail-head">
+            <h1 class="note-detail-title">{{clickedNoteData?.noteTitle || '未命名便签'}}</h1>
+            <button type="button" class="note-detail-edit" (click)="startEditing()">编辑</button>
+          </header>
+          <div class="note-detail-body" [innerHTML]="detailHtml()"></div>
+          <footer class="note-detail-foot">
+            <button type="button" class="note-detail-close" (click)="closeModal(false)">关闭</button>
+          </footer>
+          </div>
+        </div>
+      } @else {
+        <app-input #noteEditor [noteToEdit]="clickedNoteData" [isEditing]="true" [autoOpenImagePicker]="openImagePickerOnModal">
+        </app-input>
+      }
     }
   </div>
 </div>

@@ -175,7 +175,11 @@ function serveWebAsset(request) {
     '.woff2': 'font/woff2', '.otf': 'font/otf', '.svg': 'image/svg+xml'
   };
   return new Response(fs.createReadStream(file), {
-    headers: { 'Content-Type': types[path.extname(file).toLowerCase()] || 'application/octet-stream' }
+    headers: {
+      'Content-Type': types[path.extname(file).toLowerCase()] || 'application/octet-stream',
+      // The app is served from disk; never let Chromium serve a stale bundle.
+      'Cache-Control': 'no-store'
+    }
   });
 }
 

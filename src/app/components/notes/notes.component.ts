@@ -4,6 +4,7 @@ import { OfflineSyncService } from 'src/app/services/offline-sync.service';
 import { BinderDropService } from 'src/app/services/binder-drop.service';
 import { NativeWorkspaceService } from 'src/app/services/native-workspace.service';
 import { createNoteHtmlContainer, sanitizeNoteHtml } from '../../utils/note-html';
+import { markdownToHtml } from '../../utils/markdown';
 import { CheckboxI, NoteAttachmentI, NoteI, NoteImageI } from './../../interfaces/notes';
 import { AfterViewChecked, ChangeDetectorRef, Component, HostListener, NgZone, OnDestroy, OnInit, ViewChild, ElementRef, ViewChildren, QueryList } from '@angular/core';
 import { Capacitor, registerPlugin } from '@capacitor/core';
@@ -129,6 +130,7 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     zNone: 'None'
   }
   noteWidth = 240
+  modalMode: 'detail' | 'edit' = 'detail'
   clickedNoteData: NoteI = {} as NoteI
   collaboratorNote?: NoteI
   collaboratorUsers: ShareUserI[] = []
@@ -817,6 +819,7 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.captureModalScrollPosition()
     this.clickedNoteData = noteData.isCardPreview ? await this.notesService.get(noteData.id!, { merge: false }).catch(() => noteData) : noteData
     const modalContainer = this.modalContainer.nativeElement
+    this.modalMode = 'detail'
     modalContainer.style.display = 'block';
     // Lets the page lay out as sidebar | list | editor while a note is open.
     document.body.classList.add('note-editor-open')
@@ -828,6 +831,20 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     document.addEventListener('mousedown', this.mouseDownEvent)
     if (trackHistory) await this.openNoteHistory(noteData.id!)
     return true
+  }
+
+  startEditing() {
+    this.modalMode = 'edit'
+    this.cd.detectChanges()
+  }
+
+  /** Rendered Markdown for the read-only detail view. */
+  detailHtml() {
+    const note = this.clickedNoteData
+    if (!note) return ''
+    const source = (note as { markdownSource?: string }).markdownSource
+    const body = source && source.trim() ? markdownToHtml(source) : (note.noteBody || '')
+    return sanitizeNoteHtml(body)
   }
 
   mouseDownEvent = (event: Event) => {
