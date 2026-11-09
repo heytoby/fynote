@@ -115,7 +115,7 @@ export class MarkdownEditorComponent implements OnInit, OnChanges, AfterViewInit
 
   @ViewChild('host', { static: false }) host?: ElementRef<HTMLElement>
 
-  mode: Mode = 'split'
+  mode: Mode = 'edit'
   rendered = ''
 
   private view?: EditorView
