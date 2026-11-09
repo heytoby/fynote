@@ -126,26 +126,26 @@
   [class.detail-mode]="modalMode === 'detail'" [class.edit-mode]="modalMode === 'edit'">
   <div #modal class="modal">
     @if (modalContainer.style.display == 'block') {
-      @if (modalMode === 'detail') {
-        <div class="note-detail">
-          <div class="note-detail-card">
-          <header class="note-detail-head">
-            <h1 class="note-detail-title">{{clickedNoteData?.noteTitle || '未命名便签'}}</h1>
-            <button type="button" class="note-detail-edit" (click)="startEditing()">编辑</button>
-          </header>
-          <div class="note-detail-body" [innerHTML]="detailHtml()"></div>
-          <footer class="note-detail-foot">
-            <button type="button" class="note-detail-close" (click)="closeModal(false)">关闭</button>
-          </footer>
-          </div>
-        </div>
-      } @else {
-        <app-input #noteEditor [noteToEdit]="clickedNoteData" [isEditing]="true" [autoOpenImagePicker]="openImagePickerOnModal">
-        </app-input>
-      }
+      <app-input #noteEditor [noteToEdit]="clickedNoteData" [isEditing]="true" [autoOpenImagePicker]="openImagePickerOnModal">
+      </app-input>
     }
   </div>
 </div>
+
+@if (detailOpen) {
+  <div class="note-detail-overlay" (click)="closeNoteDetail()">
+    <div class="note-detail-card" (click)="$event.stopPropagation()">
+      <header class="note-detail-head">
+        <h1 class="note-detail-title">{{clickedNoteData?.noteTitle || '未命名便签'}}</h1>
+        <button type="button" class="note-detail-edit" (click)="startEditing()">编辑</button>
+      </header>
+      <div class="note-detail-body" [innerHTML]="detailHtml()"></div>
+      <footer class="note-detail-foot">
+        <button type="button" class="note-detail-close" (click)="closeNoteDetail()">关闭</button>
+      </footer>
+    </div>
+  </div>
+}
 
 <!--*  note template -->
 <ng-template #noteTemplate let-notes="notes">

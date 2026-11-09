@@ -104,6 +104,11 @@ export class SharedService {
     })
   }
 
+  /** Read-only detail card shown over the wall before editing. */
+  noteDetail = new BehaviorSubject<{ id: number; title: string; html: string } | null>(null)
+  /** The detail card asked to switch into the editor. */
+  editNoteRequested = new Subject<number>()
+
   closeSideBar = new Subject<boolean>()
   closeSideBarIfOpen = new Subject<boolean>()
   sideBarCollapsed = new BehaviorSubject<boolean>(window.innerWidth <= 700)

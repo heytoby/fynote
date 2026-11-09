@@ -185,6 +185,15 @@ export class MainComponent implements OnInit, OnDestroy {
     private deviceMove: DeviceServerMoveService
   ) {}
 
+  closeNoteDetail() {
+    this.Shared.noteDetail.next(null)
+  }
+
+  editFromNoteDetail(id: number) {
+    this.Shared.noteDetail.next(null)
+    this.Shared.editNoteRequested.next(id)
+  }
+
   openMobileComposer() {
     this.Shared.openMobileComposer.next(true)
   }

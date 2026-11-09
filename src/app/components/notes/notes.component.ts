@@ -130,7 +130,8 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     zNone: 'None'
   }
   noteWidth = 240
-  modalMode: 'detail' | 'edit' = 'detail'
+  modalMode: 'detail' | 'edit' = 'edit'
+  detailOpen = false
   clickedNoteData: NoteI = {} as NoteI
   collaboratorNote?: NoteI
   collaboratorUsers: ShareUserI[] = []
@@ -798,7 +799,7 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
 
   //? modal  -----------------------------------------------------------
 
-  async openModal(clickedNote: HTMLDivElement | null, noteData: NoteI, openImagePicker = false, trackHistory = true) {
+  async openModal(clickedNote: HTMLDivElement | null, noteData: NoteI, openImagePicker = false, trackHistory = true, skipDetail = false) {
     if (this.suppressNextOpen) {
       this.suppressNextOpen = false
       return false
@@ -819,8 +820,15 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.captureModalScrollPosition()
     this.clickedNoteData = noteData.isCardPreview ? await this.notesService.get(noteData.id!, { merge: false }).catch(() => noteData) : noteData
     const modalContainer = this.modalContainer.nativeElement
-    this.modalMode = 'detail'
-    modalContainer.style.display = 'block';
+    // Show the read-only detail card first; the editor opens on demand.
+    if (!skipDetail) {
+      this.clickedNoteData = noteData
+      this.detailOpen = true
+      this.cd.detectChanges()
+      return true
+    }
+    this.modalMode = 'edit'
+    modalContainer.style.display = 'block'
     // Lets the page lay out as sidebar | list | editor while a note is open.
     document.body.classList.add('note-editor-open')
     // The board is narrower now, so let the masonry re-pack its columns.
@@ -833,9 +841,22 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
     return true
   }
 
-  startEditing() {
-    this.modalMode = 'edit'
+  detailHtmlFor(note: NoteI) {
+    const source = (note as { markdownSource?: string }).markdownSource
+    const body = source && source.trim() ? markdownToHtml(source) : (note.noteBody || '')
+    return sanitizeNoteHtml(body)
+  }
+
+  closeNoteDetail() {
+    this.detailOpen = false
     this.cd.detectChanges()
+  }
+
+  startEditing() {
+    const note = this.clickedNoteData
+    if (!note) return
+    this.detailOpen = false
+    void this.openModal(null, note, false, false, true)
   }
 
   /** Rendered Markdown for the read-only detail view. */
@@ -3027,6 +3048,10 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
   readonly folderLabel = folderLabel;
 
   ngOnInit(): void {
+    this.subscriptions.push(this.Shared.editNoteRequested.subscribe(async (id) => {
+      const note = this.Shared.note.all.find((item) => String(item.id) === String(id))
+      if (note) await this.openModal(null, note, false, true, true)
+    }))
     this.syncCurrentPage(this.router.url)
     window.addEventListener('kept-smart-capture-notes-added', this.smartCaptureNotesAddedHandler)
     this.registerPullToRefresh()
