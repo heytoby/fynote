@@ -144,9 +144,9 @@ export class SettingsComponent implements OnInit, OnDestroy {
   savingSharedOrganization = false;
   notePreviewTextSize: 'compact' | 'default' | 'large' = 'default';
   readonly notePreviewTextSizeOptions: Array<{ value: 'compact' | 'default' | 'large'; label: string }> = [
-    { value: 'compact', label: 'Compact' },
-    { value: 'default', label: 'Default' },
-    { value: 'large', label: 'Large' }
+    { value: 'compact', label: '紧凑' },
+    { value: 'default', label: '默认' },
+    { value: 'large', label: '大' }
   ];
   permissionsStatus: PermissionsStatus | null = null;
   isLoadingPermissions = false;
@@ -227,7 +227,7 @@ export class SettingsComponent implements OnInit, OnDestroy {
   }
   async loadDeviceData() {
     const usage = await this.authService.workspace.storageUsage();
-    this.storageUsed = `${Math.round((usage.usage || 0) / 1048576)} MiB used`;
+    this.storageUsed = `已使用 ${Math.round((usage.usage || 0) / 1048576)} MB`;
     this.stagingWorkspaces = (await this.offlineStore.listWorkspaces()).filter(item=>item.status === 'staging');
   }
 

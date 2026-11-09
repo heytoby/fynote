@@ -14,7 +14,7 @@ interface BackupEntry { path: string; kind: 'record' | 'blob'; type?: ResourceTy
 interface BackupManifest { format: 'kept'; version: 1; createdAt: string; preferences: WorkspacePreferences; entries: BackupEntry[]; }
 const CHUNK = 256 * 1024;
 const JSON_LIMIT = 64 * 1024 * 1024;
-export const BACKUP_NOTICE = 'This backup includes readable note content, including passcode-locked notes. Backups are plain ZIP files. Store it somewhere private. Deleting the app may delete all notes kept on this device.';
+export const BACKUP_NOTICE = '备份包含可读的便签内容（含密码锁定的便签），是普通 ZIP 文件，请存放在私密位置。卸载应用可能删除本机便签。';
 
 function toBase64(bytes: Uint8Array) {
   let text = ''; for (let i = 0; i < bytes.length; i += 8192) text += String.fromCharCode(...bytes.subarray(i, i + 8192));

@@ -9,9 +9,6 @@
       <a routerLink="/">{{'← Back to notes' | uiText:'← 返回笔记'}}</a>
     </div>
 
-    <button type="button" class="ui-language" (click)="uiLanguage.toggle()" aria-label="切换语言 / Switch language">
-      {{uiLanguage.current === 'en' ? '中文' : 'EN'}}
-    </button>
     <h1>{{'Settings' | uiText:'设置'}}</h1>
 
     @if (authService.isAdmin && !managedHostingInfo?.managed) {
@@ -195,7 +192,7 @@
           <label class="toggle-label">
             <input type="checkbox" [checked]="oauthAccess?.enabled" [disabled]="isSavingOAuthAccess"
               (change)="toggleOAuthAccess($event)">
-            <span class="toggle-text">{{oauthAccess?.enabled ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{oauthAccess?.enabled ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
         <p class="section-desc">
@@ -232,7 +229,7 @@
           <label class="toggle-label">
             <input type="checkbox" [checked]="mcpAccess?.enabled" [disabled]="isSavingMcpAccess"
               (change)="toggleMcpAccess($event)">
-            <span class="toggle-text">{{mcpAccess?.enabled ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{mcpAccess?.enabled ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
         <p class="section-desc">
@@ -347,7 +344,7 @@
           <span>Two-Factor Authentication (TOTP)</span>
           <label class="toggle-label">
             <input type="checkbox" [checked]="totpEnabled" (change)="toggle2fa($event)">
-            <span class="toggle-text">{{totpEnabled ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{totpEnabled ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
         <p class="section-desc">
@@ -397,11 +394,11 @@
     <div class="settings-group">
       <h2 class="group-title color-blue">
         <span class="material-symbols-outlined">tune</span>
-        Display & Editing
+        {{'Display & Editing' | uiText:'显示与编辑'}}
       </h2>
 
       <p class="section-desc">
-        Adjust Kept's appearance, times, checklist rows, and links.
+        {{'Adjust Kept\'s appearance, times, checklist rows, and links.' | uiText:'调整外观、时间显示、清单项与链接。'}}
       </p>
 
       <div class="section-title">Language / 语言</div>
@@ -441,7 +438,7 @@
             <input type="checkbox" aria-label="Follow system appearance"
               [checked]="authService.followsSystemTheme" [disabled]="isSavingThemePreference"
               (change)="toggleFollowSystemTheme($event)">
-            <span class="toggle-text">{{authService.followsSystemTheme ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{authService.followsSystemTheme ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
 
@@ -452,7 +449,7 @@
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="useTwentyFourHourTime" (change)="toggleTwentyFourHourTime($event)">
-            <span class="toggle-text">{{useTwentyFourHourTime ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{useTwentyFourHourTime ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
 
@@ -463,7 +460,7 @@
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="showPastReminders" (change)="toggleShowPastReminders($event)">
-            <span class="toggle-text">{{showPastReminders ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{showPastReminders ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
 
@@ -477,7 +474,7 @@
               <input type="checkbox" aria-label="Use the owner's binders for shared notes"
                 [checked]="authService.currentUser?.inheritSharedBinders !== false" [disabled]="savingSharedOrganization"
                 (change)="toggleSharedOrganization('inheritSharedBinders', $event)">
-              <span class="toggle-text">{{authService.currentUser?.inheritSharedBinders !== false ? 'Enabled' : 'Disabled'}}</span>
+              <span class="toggle-text">{{authService.currentUser?.inheritSharedBinders !== false ? '已启用' : '已关闭'}}</span>
             </label>
           </div>
           <div class="preference-row">
@@ -489,7 +486,7 @@
               <input type="checkbox" aria-label="Use the owner's labels for shared notes"
                 [checked]="authService.currentUser?.inheritSharedLabels !== false" [disabled]="savingSharedOrganization"
                 (change)="toggleSharedOrganization('inheritSharedLabels', $event)">
-              <span class="toggle-text">{{authService.currentUser?.inheritSharedLabels !== false ? 'Enabled' : 'Disabled'}}</span>
+              <span class="toggle-text">{{authService.currentUser?.inheritSharedLabels !== false ? '已启用' : '已关闭'}}</span>
             </label>
           </div>
         }
@@ -501,7 +498,7 @@
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="moveCompletedChecklistItemsToBottom" (change)="toggleMoveCompletedChecklistItems($event)">
-            <span class="toggle-text">{{moveCompletedChecklistItemsToBottom ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{moveCompletedChecklistItemsToBottom ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
 
@@ -512,7 +509,7 @@
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="richLinkPreviews" (change)="toggleRichLinkPreviews($event)">
-            <span class="toggle-text">{{richLinkPreviews ? 'Enabled' : 'Disabled'}}</span>
+            <span class="toggle-text">{{richLinkPreviews ? '已启用' : '已关闭'}}</span>
           </label>
         </div>
 
@@ -584,7 +581,7 @@
           @if (googleStatus?.hasCredentials) {
             <label class="toggle-label">
               <input type="checkbox" [(ngModel)]="googleEnabled" (change)="saveGoogleEnabled()">
-              <span class="toggle-text">{{googleEnabled ? 'Enabled' : 'Disabled'}}</span>
+              <span class="toggle-text">{{googleEnabled ? '已启用' : '已关闭'}}</span>
             </label>
           }
         </div>
@@ -664,7 +661,7 @@
           @if (hasExistingCaldav) {
             <label class="toggle-label">
               <input type="checkbox" [(ngModel)]="caldavEnabled">
-              <span class="toggle-text">{{caldavEnabled ? 'Enabled' : 'Disabled'}}</span>
+              <span class="toggle-text">{{caldavEnabled ? '已启用' : '已关闭'}}</span>
             </label>
           }
         </div>
@@ -741,11 +738,11 @@
     <div class="settings-group permissions-group">
       <h2 class="group-title color-blue">
         <span class="material-symbols-outlined">security</span>
-        App Permissions
+        {{'App Permissions' | uiText:'应用权限'}}
       </h2>
 
       <p class="section-desc">
-        Manage the permissions Kept needs for reminders, voice capture, and location-based features.
+        {{'Manage the permissions Kept needs for reminders, voice capture, and location-based features.' | uiText:'管理 Fynote 用于提醒、语音记录与位置功能所需的权限。'}}
       </p>
 
       @if (isAndroid && (nativeWorkspace.locationPermissionRequired$ | async)) {
@@ -766,7 +763,7 @@
               @if (notificationPermission === 'granted') {
                 <span class="permission-granted">
                   <span class="material-symbols-outlined check-icon">check_circle</span>
-                  Granted
+                  {{'Granted' | uiText:'已授予'}}
                 </span>
               } @else if (notificationPermission === 'denied') {
                 <span class="permission-desc">{{'Blocked in browser' | uiText:'浏览器中已阻止'}}</span>
@@ -790,7 +787,7 @@
             <div class="permission-action">
               <label class="toggle-label">
                 <input type="checkbox" [checked]="androidSmartCaptureEnabled" (change)="toggleAndroidSmartCapture($event)">
-                <span class="toggle-text">{{androidSmartCaptureEnabled ? 'Enabled' : 'Disabled'}}</span>
+                <span class="toggle-text">{{androidSmartCaptureEnabled ? '已启用' : '已关闭'}}</span>
               </label>
             </div>
           </div>
@@ -803,7 +800,7 @@
             <div class="permission-action">
               <label class="toggle-label">
                 <input type="checkbox" [checked]="legacyAndroidSmartCaptureEnabled" (change)="toggleLegacyAndroidSmartCapture($event)">
-                <span class="toggle-text">{{legacyAndroidSmartCaptureEnabled ? 'Enabled' : 'Disabled'}}</span>
+                <span class="toggle-text">{{legacyAndroidSmartCaptureEnabled ? '已启用' : '已关闭'}}</span>
               </label>
             </div>
           </div>
@@ -828,7 +825,7 @@
                   @if (permissionsStatus[perm.key] === 'granted') {
                     <span class="permission-granted">
                       <span class="material-symbols-outlined check-icon">check_circle</span>
-                      Granted
+                      {{'Granted' | uiText:'已授予'}}
                     </span>
                   } @else if (permissionsStatus[perm.key] === 'notDetermined') {
                     <button type="button" class="btn-secondary btn-permission"
