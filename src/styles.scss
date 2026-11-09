@@ -3763,3 +3763,10 @@ body :is(.overview-cbox-row, .cbox-row) .cbox-icon {
     min-height: calc(100vh - 150px) !important;
   }
 }
+
+/* [hidden] must win over the toolbars' display rules. */
+.modal-container .icons-container[hidden],
+.desktop-placeholder-input .icons-container[hidden],
+.modal-container .icons-container.min[hidden] {
+  display: none !important;
+}
