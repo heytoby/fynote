@@ -3048,6 +3048,10 @@ export class NotesComponent implements OnInit, OnDestroy, AfterViewChecked {
   readonly folderLabel = folderLabel;
 
   ngOnInit(): void {
+    this.subscriptions.push(this.Shared.openNoteRequest.subscribe(async (request) => {
+      const note = this.Shared.note.all.find((item) => String(item.id) === String(request.id))
+      if (note) await this.openModal(null, note, false, false, true)
+    }))
     this.subscriptions.push(this.Shared.editNoteRequested.subscribe(async (id) => {
       const note = this.Shared.note.all.find((item) => String(item.id) === String(id))
       if (note) await this.openModal(null, note, false, true, true)

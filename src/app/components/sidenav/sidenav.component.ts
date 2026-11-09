@@ -32,6 +32,27 @@ export class NavComponent implements OnInit, OnDestroy {
   readonly folderLabel = folderLabel;
   readonly folderLeaf = folderLeaf;
 
+  /** Notes directly inside a folder (root notes use an empty path). */
+  notesInFolder(path: string) {
+    const separator = folderSeparator
+    return this.Shared.note.all
+      .filter((note) => {
+        const binder = String(note.binder || '')
+        if (!path) return !binder.trim()
+        return binder === path
+      })
+      .sort((a, b) => (a.noteTitle || '').localeCompare(b.noteTitle || '', 'zh-Hans-CN'))
+  }
+
+  rootNotes() {
+    return this.notesInFolder('')
+  }
+
+  openNoteFromTree(note: { id?: number }) {
+    if (note?.id == null) return
+    this.Shared.openNoteRequest.next({ id: note.id })
+  }
+
   get folders() {
     return folderRows(this.Shared.binder.list.map(folder => folder.name), this.expandedFolders);
   }

@@ -68,6 +68,21 @@
       </div>
       <button class="folder-action material-symbols-outlined" type="button" [attr.aria-label]="'New subfolder' | uiText:'新建子文件夹'" (click)="openBinderModal(true, binder.path)">create_new_folder</button>
       </div>
+      @if (expandedFolders.has(binder.path)) {
+        @for (note of notesInFolder(binder.path); track note.id) {
+          <button type="button" class="tree-note" [style.padding-left.px]="12 * (binder.depth + 1) + 16"
+            [attr.data-tip]="note.noteTitle" (click)="openNoteFromTree(note)">
+            <span class="material-symbols-outlined tree-note-icon" aria-hidden="true">description</span>
+            <span class="tree-note-title">{{note.noteTitle || '未命名便签'}}</span>
+          </button>
+        }
+      }
+    }
+    @for (note of rootNotes(); track note.id) {
+      <button type="button" class="tree-note is-root" (click)="openNoteFromTree(note)">
+        <span class="material-symbols-outlined tree-note-icon" aria-hidden="true">description</span>
+        <span class="tree-note-title">{{note.noteTitle || '未命名便签'}}</span>
+      </button>
     }
   </div>
 

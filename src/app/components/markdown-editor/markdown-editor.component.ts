@@ -67,10 +67,12 @@ type Mode = 'edit' | 'split' | 'preview'
       flex: 0 0 auto;
       gap: 12px;
       justify-content: space-between;
+      gap: 16px;
       padding: 6px 10px;
     }
-    .md-actions { display: flex; flex-wrap: wrap; gap: 2px; }
+    .md-actions { display: flex; flex: 1 1 auto; flex-wrap: nowrap; gap: 2px; min-width: 0; overflow-x: auto; }
     .md-actions button, .md-modes button {
+      white-space: nowrap;
       background: transparent;
       border: 0;
       border-radius: 4px;
@@ -81,7 +83,7 @@ type Mode = 'edit' | 'split' | 'preview'
       padding: 4px 6px;
     }
     .md-actions button:hover, .md-modes button:hover { background: #f1f3f4; }
-    .md-modes { display: flex; gap: 2px; }
+    .md-modes { display: flex; flex: 0 0 auto; gap: 2px; white-space: nowrap; }
     .md-close { margin-left: 8px; }
     .md-modes button.active { background: #e8f0fe; color: #1a73e8; }
     .md-body { display: grid; flex: 1 1 auto; grid-template-columns: 1fr; min-height: 0; min-width: 0; overflow: hidden; }
@@ -133,7 +135,7 @@ export class MarkdownEditorComponent implements OnInit, OnChanges, AfterViewInit
     this.rendered = this.md.render(this.value || '')
     const view = this.view
     if (!view) return
-    const next = this.value || ''
+    const next = (this.value || '').replace(/^\n+/, '')
     if (next !== view.state.doc.toString()) {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: next } })
     }
@@ -144,7 +146,7 @@ export class MarkdownEditorComponent implements OnInit, OnChanges, AfterViewInit
     const view = new EditorView({
       parent: this.host.nativeElement,
       state: EditorState.create({
-        doc: this.value || '',
+        doc: (this.value || '').replace(/^\n+/, ''),
         extensions: [
           lineNumbers(),
           history(),
