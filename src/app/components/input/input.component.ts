@@ -293,7 +293,7 @@ export class InputComponent implements OnInit {
       disabled: true,
     },
     checkbox: {
-      value: 'Show checkboxes'
+      value: '显示复选框'
     },
   }
   //? placeholder  --------------------------------------------------
@@ -494,7 +494,7 @@ export class InputComponent implements OnInit {
     if (this.isCbox.value) {
       this.moreMenuEls.checkbox.value = this.isHybridNote ? 'Checklists shown' : 'Add text'
     } else {
-      this.moreMenuEls.checkbox.value = 'Show checkboxes'
+      this.moreMenuEls.checkbox.value = '显示复选框'
     }
   }
 
@@ -3556,7 +3556,7 @@ export class InputComponent implements OnInit {
       this.selectedCollaboratorIds = (this.noteToEdit.collaborators || []).map(user => user.id)
     } else if (!navigator.onLine) {
       this.collaboratorUsers = []
-      this.collaboratorError = 'Connect to the server before choosing collaborators for a new note.'
+      this.collaboratorError = '请先连接服务器，再为新便签选择协作者。'
     }
     this.Shared.createTooltip(button, tooltipEl)
 

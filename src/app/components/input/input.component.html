@@ -329,7 +329,7 @@
         </div>
       </div>
       <div class="timestamp">
-        {{lastEditedTime || 'Edited just now'}}
+        {{lastEditedTime || '刚刚编辑'}}
       </div>
       <div #moreMenuTtBtnMobile class="mobile-icon more" (click)="openTooltip(moreMenuTtBtnMobile,moreMenuTt)" [title]="'More' | uiText:'更多'" >
         <span class="material-symbols-outlined">more_vert</span>
@@ -896,7 +896,7 @@
 <!--? more MENU -->
 <div #moreMenuTt data-tooltip="true" data-is-tooltip-open="false" class="moreMenu">
   <div [hidden]="moreMenuEls.delete.disabled" (click)="moreMenu(moreMenuTt).trash()">
-    {{ isSharedNoteForCurrentUser() ? 'Unshare this with me' : 'Delete note' }}
+    {{ isSharedNoteForCurrentUser() ? '取消共享给我' : '删除便签' }}
   </div>
   <div #labelMenuBtn
     (click)="this.Shared.closeTooltip(moreMenuTt);openTooltip(moreMenuTtBtn!.nativeElement,labelMenuTt)">
@@ -908,7 +908,7 @@
   </div>
   <!-- <div [hidden]="moreMenuEls.drawing.disabled">{{moreMenuEls.drawing.value}}</div> -->
   <div [hidden]="moreMenuEls.copy.disabled" (click)="moreMenu(moreMenuTt).clone()">
-    Make a copy
+    创建副本
   </div>
   <div (click)="moreMenu(moreMenuTt).toggleCbox()">
     {{moreMenuEls.checkbox.value}}
@@ -973,9 +973,9 @@
 </div>
 <!--? collaborator MENU -->
 <div #collaboratorMenuTt data-tooltip="true" data-is-tooltip-open="false" class="collaboratorMenu">
-  <div class="title">Collaborators</div>
+  <div class="title">协作者</div>
   @if (canSelectDraftCollaborators()) {
-    <div class="hint">Will be shared when the note is created.</div>
+    <div class="hint">创建便签后自动共享。</div>
   } @else if (!canManageCollaborators()) {
     <div class="hint">Shared with you. Only the owner can change access.</div>
   }
@@ -983,7 +983,7 @@
     <div class="error">{{collaboratorError}}</div>
   }
   @if (!collaboratorUsers.length && !collaboratorError) {
-    <div class="hint">No other users yet.</div>
+    <div class="hint">暂无其他用户。</div>
   }
   <div class="user-list">
     @for (user of collaboratorUsers; track user.id) {
@@ -1020,7 +1020,7 @@
 </div>
 <!--? label MENU -->
 <div #labelMenuTt data-tooltip="true" data-is-tooltip-open="false" class="labelMenu">
-  <div class="title">Label note</div>
+  <div class="title">为便签加标签</div>
   @if (sharedOrganizationHint('labels')) {
     <p class="organization-hint">{{sharedOrganizationHint('labels')}}</p>
   }

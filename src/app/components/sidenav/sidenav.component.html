@@ -111,7 +111,7 @@
       <span class="material-pic material-symbols-outlined" aria-hidden="true">
         {{auth.effectiveTheme === 'light' ? 'dark_mode' : 'light_mode'}}
       </span>
-      <span class="text">{{auth.effectiveTheme === 'light' ? 'Use dark mode' : 'Use light mode'}}</span>
+      <span class="text">{{auth.effectiveTheme === 'light' ? '切换到深色模式' : '切换到浅色模式'}}</span>
     </div>
     @if (!auth.isLocal) {
     <div class="item" [attr.aria-label]="'Sign out' | uiText:'退出登录'"  data-tip="退出登录" (click)="logout()">
