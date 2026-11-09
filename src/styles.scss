@@ -3742,3 +3742,15 @@ body :is(.overview-cbox-row, .cbox-row) .cbox-icon {
     width: 100% !important;
   }
 }
+
+/* The markdown editor must fill the open note page. */
+body.note-editor-open .modal-container app-markdown-editor,
+body.note-editor-open .desktop-placeholder-input app-markdown-editor {
+  display: flex !important;
+  flex: 1 1 auto !important;
+  min-height: 60vh;
+  width: 100%;
+}
+body.note-editor-open .modal-container app-markdown-editor .md-shell {
+  width: 100%;
+}

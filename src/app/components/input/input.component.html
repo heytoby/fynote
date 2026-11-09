@@ -777,9 +777,9 @@
     (click)="onNoteBodyClick($event)" (contextmenu)="downloadInlineImage($event)"
     class="note-body" [hidden]="markdownSourceMode" contenteditable="true" spellcheck="true" autocomplete="off" autocorrect="off" autocapitalize="sentences" inputmode="text">
   </div>
-  <textarea #markdownEditor class="markdown-source-editor" [hidden]="!markdownSourceMode"
-    [value]="markdownSource" (input)="onMarkdownSourceInput(markdownEditor.value)"
-    aria-label="Markdown 源码" spellcheck="false"></textarea>
+  @if (markdownSourceMode) {
+    <app-markdown-editor [value]="markdownSource" (valueChange)="onMarkdownSourceInput($event)"></app-markdown-editor>
+  }
   @if (showMobileNewNoteStarters()) {
     <section class="mobile-new-note-starters" aria-label="Start note as">
       <div class="mobile-new-note-starters-label">Or start as</div>

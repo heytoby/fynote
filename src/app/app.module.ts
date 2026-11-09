@@ -10,6 +10,7 @@ import { CatalogReorderDirective } from './components/sidenav/catalog-reorder.di
 import { NavbarComponent } from './components/navbar/navbar.component';
 import { NotesComponent } from './components/notes/notes.component';
 import { InputComponent } from './components/input/input.component';
+import { MarkdownEditorComponent } from './components/markdown-editor/markdown-editor.component';
 import { ph } from './pipes/ph.pipe';
 import { AppRoutingModule } from './app-routing.module';
 import { CboxSortPipe } from './pipes/cbox-sort.pipe';
@@ -61,6 +62,7 @@ import { LocationMapPickerComponent } from './components/location-map-picker/loc
     ],
     bootstrap: [AppComponent], imports: [BrowserModule,
         FormsModule,
+        MarkdownEditorComponent,
         AppRoutingModule], providers: [
         { provide: APP_INITIALIZER, useFactory: (auth: AuthService) => () => auth.initializeBrowserSession(), deps: [AuthService], multi: true },
         { provide: HTTP_INTERCEPTORS, useClass: ConnectionHeadersInterceptor, multi: true },

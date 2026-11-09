@@ -100,7 +100,7 @@ export class InputComponent implements OnInit {
   isCboxCompletedListCollapsed = false
   showTextFormatting = false
   showSelectionFormatting = false
-  markdownSourceMode = false
+  markdownSourceMode = true
   markdownSource = ''
   selectionFormattingStyle: Record<string, string> = {}
   private textHistoryTarget?: HTMLElement
@@ -3503,6 +3503,7 @@ export class InputComponent implements OnInit {
     if (this.noteBody) this.noteBody.nativeElement.innerHTML = sanitizeNoteHtml(this.decorateLinksForEditor(markdownToHtml(this.markdownSource)))
     this.hydrateEditorLinkPreviews()
     this.hydrateInlineImageButtons()
+    if (this.isCbox.value) this.markdownSourceMode = false
     if (this.isDrawingNote) this.setupDrawingCanvas()
   }
 
