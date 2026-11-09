@@ -37,7 +37,7 @@
         <p class="section-desc">{{storageUsed}}</p>
         @if (authService.isLocal) {
           @if (authService.workspace.local?.status === 'frozen') {<p role="status">Your notes are paused while Kept verifies a server transfer. Retry “Move my notes to a server” to finish safely. Your device copy is preserved.</p>}
-          <p class="section-desc">Your notes are stored on this device. Sharing, collaboration, web access, and account integrations need a server.</p>
+          <p class="section-desc">{{'Your notes are stored on this device. Sharing, collaboration, web access, and account integrations need a server.' | uiText:'便签保存在本机。共享、协作、网页访问与账号集成需要服务器。'}}</p>
           <p class="section-desc">{{backupNotice}}</p>
           <div class="device-actions">
             <button type="button" class="btn-secondary" [disabled]="deviceBusy" (click)="backupDevice()"><span class="material-symbols-outlined" aria-hidden="true">download</span>{{'Save a complete backup' | uiText:'保存完整备份'}}</button>
@@ -63,7 +63,7 @@
                   </button>
                   <button type="button" class="btn-secondary" [disabled]="deviceBusy" (click)="moveDevice()">
                     <span class="material-symbols-outlined" aria-hidden="true">dns</span>
-                    <span><strong>Self-host</strong><small>Connect to a Kept server you host yourself.</small></span>
+                    <span><strong>Self-host</strong><small>{{'Connect to a Kept server you host yourself.' | uiText:'连接你自己搭建的服务器。'}}</small></span>
                     <span class="material-symbols-outlined" aria-hidden="true">chevron_right</span>
                   </button>
                 </div>
@@ -72,7 +72,7 @@
               <button type="button" class="btn-secondary" [disabled]="deviceBusy" (click)="cancelMovePrompt()">{{cloudMoveReady ? 'Cancel transfer' : 'Cancel'}}</button>
             </div>
           }
-          <label class="toggle-label backup-reminder-toggle"><input type="checkbox" [checked]="!authService.workspace.local?.backupRemindersDisabled" (change)="backups.dismissReminder(!$any($event.target).checked)"><span class="toggle-text">Remind me to back up my notes</span></label>
+          <label class="toggle-label backup-reminder-toggle"><input type="checkbox" [checked]="!authService.workspace.local?.backupRemindersDisabled" (change)="backups.dismissReminder(!$any($event.target).checked)"><span class="toggle-text">{{'Remind me to back up my notes' | uiText:'提醒我备份便签'}}</span></label>
           @if (backups.progress$ | async; as progress) { <p role="status">{{progress}}</p> }
           @if (migration.progress$ | async; as progress) { <p role="status">{{progress}}</p> }
         }
@@ -157,7 +157,7 @@
       </section>
 
       <section class="settings-section export-section" id="export-notes" style="border-top: 1px solid rgba(255,255,255,0.05); padding-top: 24px; margin-top: 24px;">
-        <div class="section-title">Export your Kept data</div>
+        <div class="section-title">{{'Export your Kept data' | uiText:'导出你的数据'}}</div>
         <p class="section-desc">
           A readable copy of your notes, checklists and labels. These exports cannot be imported back into Kept. To move everything, including images and attachments, to another Kept server, ask your server's admin for a full backup.
         </p>
@@ -421,7 +421,7 @@
         <div class="preference-row">
           <div class="preference-info">
             <span class="preference-label">English</span>
-            <span class="preference-desc">English interface</span>
+            <span class="preference-desc">{{'English interface' | uiText:'英文界面'}}</span>
           </div>
           <label class="toggle-label">
             <input type="radio" name="fynote-language" [checked]="uiLanguage.current === 'en'"
@@ -434,8 +434,8 @@
       <div class="preferences-list">
         <div class="preference-row">
           <div class="preference-info">
-            <span class="preference-label">Follow system appearance</span>
-            <span class="preference-desc">Match this device's light or dark appearance. Using the theme toggle turns this off.</span>
+            <span class="preference-label">{{'Follow system appearance' | uiText:'跟随系统外观'}}</span>
+            <span class="preference-desc">{{'Match this device\'s light or dark appearance. Using the theme toggle turns this off.' | uiText:'跟随设备的浅色或深色外观；手动切换主题后会关闭此选项。'}}</span>
           </div>
           <label class="toggle-label">
             <input type="checkbox" aria-label="Follow system appearance"
@@ -448,7 +448,7 @@
         <div class="preference-row">
           <div class="preference-info">
             <span class="preference-label">24-hour time</span>
-            <span class="preference-desc">Show reminder times without AM/PM.</span>
+            <span class="preference-desc">{{'Show reminder times without AM/PM.' | uiText:'提醒时间使用 24 小时制。'}}</span>
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="useTwentyFourHourTime" (change)="toggleTwentyFourHourTime($event)">
@@ -458,8 +458,8 @@
 
         <div class="preference-row">
           <div class="preference-info">
-            <span class="preference-label">Show past reminders on notes</span>
-            <span class="preference-desc">Keep fired reminder times visible in a muted style.</span>
+            <span class="preference-label">{{'Show past reminders on notes' | uiText:'在便签上显示已过期的提醒'}}</span>
+            <span class="preference-desc">{{'Keep fired reminder times visible in a muted style.' | uiText:'已触发的提醒以浅色继续显示。'}}</span>
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="showPastReminders" (change)="toggleShowPastReminders($event)">
@@ -496,8 +496,8 @@
 
         <div class="preference-row">
           <div class="preference-info">
-            <span class="preference-label">Move completed checklist items to bottom</span>
-            <span class="preference-desc">Turn off to keep checked items in their manual list order.</span>
+            <span class="preference-label">{{'Move completed checklist items to bottom' | uiText:'已完成清单项移到底部'}}</span>
+            <span class="preference-desc">{{'Turn off to keep checked items in their manual list order.' | uiText:'关闭后，已勾选的清单项保持手动顺序。'}}</span>
           </div>
           <label class="toggle-label">
             <input type="checkbox" [checked]="moveCompletedChecklistItemsToBottom" (change)="toggleMoveCompletedChecklistItems($event)">
@@ -507,7 +507,7 @@
 
         <div class="preference-row">
           <div class="preference-info">
-            <span class="preference-label">Rich link previews</span>
+            <span class="preference-label">{{'Rich link previews' | uiText:'富链接预览'}}</span>
             <span class="preference-desc">Turn off to show links as plain text instead of preview cards.</span>
           </div>
           <label class="toggle-label">
@@ -518,8 +518,8 @@
 
         <div class="preference-row">
           <div class="preference-info">
-            <span class="preference-label">Note preview text size and density</span>
-            <span class="preference-desc">Adjust note card text and density in the overview.</span>
+            <span class="preference-label">{{'Note preview text size and density' | uiText:'便签预览的字号与密度'}}</span>
+            <span class="preference-desc">{{'Adjust note card text and density in the overview.' | uiText:'调整便签卡的正文与密度。'}}</span>
           </div>
           <div class="segmented-control" role="group" aria-label="Note preview text size">
             @for (option of notePreviewTextSizeOptions; track option.value) {
@@ -757,7 +757,7 @@
         <div class="permissions-list notification-permissions-list">
           <div class="permission-row">
             <div class="permission-info">
-              <span class="permission-label">Web notifications</span>
+              <span class="permission-label">{{'Web notifications' | uiText:'网页通知'}}</span>
               <span class="permission-desc">
                 Reminder alerts from this browser. You can dismiss the prompt and show it again here.
               </span>
@@ -769,7 +769,7 @@
                   Granted
                 </span>
               } @else if (notificationPermission === 'denied') {
-                <span class="permission-desc">Blocked in browser</span>
+                <span class="permission-desc">{{'Blocked in browser' | uiText:'浏览器中已阻止'}}</span>
               } @else {
                 <button type="button" class="btn-secondary btn-permission" (click)="showNotificationPrompt()">
                   Show prompt
@@ -859,7 +859,7 @@
       </h2>
 
       <section class="settings-section danger-section">
-        <div class="section-title">Delete your account</div>
+        <div class="section-title">{{'Delete your account' | uiText:'删除账号'}}</div>
         <p class="section-desc">
           Permanently delete your account and everything you own in Kept. This removes your notes, uploads,
           attachments, reminders, calendar settings, sessions, and sharing access. Shared notes owned by other
