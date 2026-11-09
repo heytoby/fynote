@@ -265,6 +265,70 @@ export class NavComponent implements OnInit, OnDestroy {
     }
   }
 
+  // ---- Folder drag & drop -------------------------------------------------
+  binderDragSource = '';
+  binderDropTarget = '';
+
+  binderDragStart(path: string, event: DragEvent) {
+    if (this.binderBusy) { event.preventDefault(); return }
+    this.binderDragSource = path
+    this.binderDropTarget = ''
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', path)
+    }
+  }
+
+  binderDragOver(path: string, event: DragEvent) {
+    if (!this.binderDragSource) return
+    const source = this.binderDragSource
+    if (path === source || inFolder(path, source, true)) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    this.binderDropTarget = path
+  }
+
+  binderDragLeave(event: DragEvent) {
+    const related = event.relatedTarget as Node | null
+    const row = event.currentTarget as HTMLElement
+    if (related && row.contains(related)) return
+    this.binderDropTarget = ''
+  }
+
+  binderDragEnd() {
+    this.binderDragSource = ''
+    this.binderDropTarget = ''
+  }
+
+  async binderDrop(targetPath: string, event: DragEvent) {
+    event.preventDefault()
+    event.stopPropagation()
+    const source = this.binderDragSource || event.dataTransfer?.getData('text/plain') || ''
+    this.binderDragEnd()
+    if (!source || source === targetPath) return
+    if (inFolder(targetPath, source, true)) return
+    const leaf = folderLeaf(source)
+    const replacement = targetPath + folderSeparator + leaf
+    const names = this.Shared.binder.list.map(folder => folder.name)
+    const subtree = names.filter(path => inFolder(path, source, true))
+    if (subtree.some(path => {
+      const next = replacement + path.slice(source.length)
+      return names.some(other => !subtree.includes(other) && other.toLowerCase() === next.toLowerCase())
+    })) {
+      this.showBinderError('同一位置已有同名文件夹。')
+      return
+    }
+    await this.changeBinder(async () => {
+      for (const path of subtree) {
+        await this.Shared.binder.db.update(path, replacement + path.slice(source.length))
+      }
+      // Keep the moved subtree visible.
+      this.expandedFolders.add(targetPath)
+      this.expandedFolders.add(replacement)
+      this.saveExpandedFolders()
+    })
+  }
+
   async moveBinder(name: string, direction: -1 | 1, event: Event) {
     if (this.binderBusy) return;
     const button = event.currentTarget as HTMLButtonElement;

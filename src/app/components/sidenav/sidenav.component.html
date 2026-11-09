@@ -52,6 +52,14 @@
       }
       <div routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" class="item is-binder"
         [attr.data-binder-drop]="binder.path"
+        draggable="true"
+        (dragstart)="binderDragStart(binder.path, $event)"
+        (dragover)="binderDragOver(binder.path, $event)"
+        (dragleave)="binderDragLeave($event)"
+        (drop)="binderDrop(binder.path, $event)"
+        (dragend)="binderDragEnd()"
+        [class.is-drop-target]="binderDropTarget === binder.path"
+        [class.is-dragging]="binderDragSource === binder.path"
         (click)="onNavItemClick()"
         [title]="binder.name" [attr.aria-label]="binder.name" [attr.data-tip]="binder.name"
         [routerLink]="['/binder', binder.path]">

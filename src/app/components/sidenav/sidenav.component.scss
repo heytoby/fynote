@@ -918,3 +918,11 @@
   }
   [data-tip]::after { display: none; }
 }
+
+/* Folder drag & drop feedback */
+.folder-tree-row .item.is-binder[draggable="true"] { cursor: grab; }
+.folder-tree-row .item.is-binder.is-dragging { opacity: 0.5; }
+.folder-tree-row .item.is-binder.is-drop-target {
+  background: rgba(26, 115, 232, 0.12);
+  box-shadow: inset 0 0 0 2px #1a73e8;
+}
