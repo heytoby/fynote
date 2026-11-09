@@ -1,4 +1,4 @@
-import { Component, NgZone, OnDestroy, OnInit } from '@angular/core';
+import { Component, NgZone, OnDestroy, OnInit , inject } from '@angular/core';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 import { NavigationEnd, Router } from '@angular/router';
 import { Subscription, filter } from 'rxjs';
@@ -8,7 +8,7 @@ import { MarkdownLibraryService } from './services/markdown-library.service';
 import { ShareIntentsService } from './services/share-intents.service';
 import { AuthService } from './services/auth.service';
 import { ManagedHostingService } from './services/managed-hosting.service';
-import { startSimplifiedChineseLocalization } from './utils/zh-cn';
+import { UiLanguage } from './pipes/ui-text.pipe';
 
 type AppBackButtonEvent = { canGoBack?: boolean };
 type PluginListenerHandle = { remove: () => Promise<void> | void };
@@ -139,6 +139,8 @@ const CapacitorApp = registerPlugin<CapacitorAppPlugin>('App');
     standalone: false
 })
 export class AppComponent implements OnInit, OnDestroy {
+  readonly uiLanguage = inject(UiLanguage)
+
   private androidBackButtonHandle?: PluginListenerHandle;
   private oidcDeepLinkHandle?: PluginListenerHandle;
   private notificationPromptResetListener?: () => void;
@@ -165,7 +167,8 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit() {
-    this.stopLocalization = startSimplifiedChineseLocalization();
+    // No runtime DOM translation: templates carry their own Chinese text.
+    this.stopLocalization = () => {};
     this.shared.initPwa();
     this.shareIntents.init().catch(console.error);
     this.registerAndroidBackButton();

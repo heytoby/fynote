@@ -9,9 +9,16 @@ export class UiLanguage {
   }
 
   toggle() {
-    this.current = this.current === 'en' ? 'zh-CN' : 'en';
-    document.documentElement.lang = this.current;
-    localStorage.setItem('fynote-language', this.current);
+    this.set(this.current === 'en' ? 'zh-CN' : 'en');
+  }
+
+  set(language: 'zh-CN' | 'en') {
+    if (this.current === language) return;
+    this.current = language;
+    document.documentElement.lang = language;
+    localStorage.setItem('fynote-language', language);
+    // The Chinese layer rewrites DOM text; reload so both states stay coherent.
+    location.reload();
   }
 }
 

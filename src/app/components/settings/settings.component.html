@@ -404,6 +404,33 @@
         Adjust Kept's appearance, times, checklist rows, and links.
       </p>
 
+      <div class="section-title">Language / 语言</div>
+      <p class="section-desc">切换界面语言。语言改变后应用会重新加载。</p>
+      <div class="preferences-list">
+        <div class="preference-row">
+          <div class="preference-info">
+            <span class="preference-label">中文</span>
+            <span class="preference-desc">简体中文界面</span>
+          </div>
+          <label class="toggle-label">
+            <input type="radio" name="fynote-language" [checked]="uiLanguage.current === 'zh-CN'"
+              (change)="uiLanguage.set('zh-CN')">
+            <span class="toggle-text">{{uiLanguage.current === 'zh-CN' ? '使用中' : '切换'}}</span>
+          </label>
+        </div>
+        <div class="preference-row">
+          <div class="preference-info">
+            <span class="preference-label">English</span>
+            <span class="preference-desc">English interface</span>
+          </div>
+          <label class="toggle-label">
+            <input type="radio" name="fynote-language" [checked]="uiLanguage.current === 'en'"
+              (change)="uiLanguage.set('en')">
+            <span class="toggle-text">{{uiLanguage.current === 'en' ? '使用中' : '切换'}}</span>
+          </label>
+        </div>
+      </div>
+
       <div class="preferences-list">
         <div class="preference-row">
           <div class="preference-info">
