@@ -246,7 +246,7 @@
   </div>
   <!--? icons -->
   @if (!isTrashed && !isDrawingNote) {
-    <div class="icons-container">
+    <div class="icons-container" [hidden]="markdownSourceMode">
       @if (showTextFormatting && canFormatText()) {
         <div class="text-format-toolbar" (mousedown)="$event.preventDefault()" (click)="$event.stopPropagation()">
           <button type="button" (mousedown)="applyTextFormat('h1',$event)">H1</button>
@@ -337,7 +337,7 @@
     </div>
   } @else if (isTrashed) {
 
-    <div class="icons-container min">
+    <div class="icons-container min" [hidden]="markdownSourceMode">
       <div class="icons">
         <div class="delete H"></div>
         <div class="restore H"></div>
@@ -778,7 +778,7 @@
     class="note-body" [hidden]="markdownSourceMode" contenteditable="true" spellcheck="true" autocomplete="off" autocorrect="off" autocapitalize="sentences" inputmode="text">
   </div>
   @if (markdownSourceMode) {
-    <app-markdown-editor [value]="markdownSource" (valueChange)="onMarkdownSourceInput($event)"></app-markdown-editor>
+    <app-markdown-editor [value]="markdownSource" (valueChange)="onMarkdownSourceInput($event)" (close)="saveNote()"></app-markdown-editor>
   }
   @if (showMobileNewNoteStarters()) {
     <section class="mobile-new-note-starters" aria-label="Start note as">

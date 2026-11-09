@@ -3756,3 +3756,10 @@ body :is(.overview-cbox-row, .cbox-row) .cbox-icon {
     width: 100% !important;
   }
 }
+
+/* Give the markdown canvas the whole page height. */
+@media (min-width: 901px) {
+  body.note-editor-open .modal-container app-markdown-editor {
+    min-height: calc(100vh - 150px) !important;
+  }
+}

@@ -48,6 +48,7 @@ type Mode = 'edit' | 'split' | 'preview'
           <button type="button" [class.active]="mode === 'edit'" (click)="setMode('edit')">编辑</button>
           <button type="button" [class.active]="mode === 'split'" (click)="setMode('split')">分栏</button>
           <button type="button" [class.active]="mode === 'preview'" (click)="setMode('preview')">预览</button>
+          <button type="button" class="md-close" (click)="close.emit()">关闭</button>
         </div>
       </div>
       <div class="md-body" [class.split]="mode === 'split'" [class.preview-only]="mode === 'preview'">
@@ -81,6 +82,7 @@ type Mode = 'edit' | 'split' | 'preview'
     }
     .md-actions button:hover, .md-modes button:hover { background: #f1f3f4; }
     .md-modes { display: flex; gap: 2px; }
+    .md-close { margin-left: 8px; }
     .md-modes button.active { background: #e8f0fe; color: #1a73e8; }
     .md-body { display: grid; flex: 1 1 auto; grid-template-columns: 1fr; min-height: 0; min-width: 0; overflow: hidden; }
     .md-body.split { grid-template-columns: 1fr 1fr; }
@@ -112,6 +114,7 @@ type Mode = 'edit' | 'split' | 'preview'
 export class MarkdownEditorComponent implements OnInit, OnChanges, AfterViewInit, OnDestroy {
   @Input() value = ''
   @Output() valueChange = new EventEmitter<string>()
+  @Output() close = new EventEmitter<void>()
 
   @ViewChild('host', { static: false }) host?: ElementRef<HTMLElement>
 
